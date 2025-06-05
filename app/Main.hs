@@ -37,13 +37,8 @@ import Network.HTTP.Simple
     setRequestMethod,
   )
 
---------------------------------------------------------------------------------
--- ❶  A *very* thin LLM monad --------------------------------------------------
---------------------------------------------------------------------------------
-
 data LLMEnv = LLMEnv
-  { -- | e.g. "https://api.groq.com/openai/v1/chat/completions"
-    endpoint :: String,
+  { endpoint :: String,
     apiKey :: Text
   }
   deriving (Show)
@@ -51,13 +46,8 @@ data LLMEnv = LLMEnv
 newtype LLM a = LLM {unLLM :: ReaderT LLMEnv IO a}
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader LLMEnv)
 
--- | Run an LLM action with an environment.
 runLLM :: LLMEnv -> LLM a -> IO a
 runLLM env = flip runReaderT env . unLLM
-
---------------------------------------------------------------------------------
--- ❷  Groq API response types -------------------------------------------------
---------------------------------------------------------------------------------
 
 newtype GroqChoice = GroqChoice
   { message :: GroqMessage
@@ -77,21 +67,15 @@ newtype GroqResponse = GroqResponse
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
 
---------------------------------------------------------------------------------
--- ❸  Generic helper that actually fires the request ---------------------------
---------------------------------------------------------------------------------
-
 callLLM ::
   forall a.
   (FromJSON a, ToJSON a, Schema a) =>
-  -- | *Concrete* prompt (already assembled)
   Text ->
   LLM a
 callLLM prompt = do
   LLMEnv {..} <- asks id
   req0 <- liftIO $ Network.HTTP.Simple.parseRequest endpoint
 
-  -- Generate an example of the expected type using Schema instance
   let exampleValue = genericSchema @a
       exampleJson = T.strip $ decodeUtf8 $ LB.toStrict $ encode exampleValue
       systemPrompt =
@@ -129,71 +113,44 @@ callLLM prompt = do
       body = Network.HTTP.Simple.getResponseBody resp
       statusCode = Network.HTTP.Simple.getResponseStatusCode resp
 
-  -- Check if we got a successful response
   if statusCode /= 200
     then error ("HTTP Error " <> show statusCode <> ": " <> LB.unpack body)
     else do
-      -- Parse Groq response and extract content
       case eitherDecode' body of
         Left e -> error ("Groq response decode failed: " <> e <> "\nRaw: " <> LB.unpack body)
         Right groqResp -> case choices groqResp of
           [] -> error "No choices in Groq response"
           (choice : _) -> do
             let contentText = content (message choice)
-
-            -- Parse the content directly as our target type
             case eitherDecode' (LB.fromStrict $ encodeUtf8 contentText) of
               Left e -> error ("JSON decode failed: " <> e <> "\nContent: " <> T.unpack contentText)
               Right a -> pure a
 
---------------------------------------------------------------------------------
--- ❹  "Aeson magic" domain types ----------------------------------------------
---------------------------------------------------------------------------------
-
-data Person = Person {name :: Text, age :: Maybe Int}
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
-
-data Analysis = Analysis {sentiment :: Text, keywords :: [Text]}
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
-
---------------------------------------------------------------------------------
--- ❺  Tiny combinator layer – *this is what the screenshot shows* --------------
---------------------------------------------------------------------------------
-
--- | Type class for generating JSON schema examples
 class Schema a where
   genericSchema :: Value
   default genericSchema :: (Generic a, GSchema (Rep a)) => Value
   genericSchema = gschema (from (undefined :: a))
 
--- Generic schema generation
 class GSchema f where
   gschema :: f p -> Value
 
--- Product types (records)
 instance (GSchema a, GSchema b) => GSchema (a :*: b) where
   gschema _ = case (gschema (undefined :: a p), gschema (undefined :: b p)) of
     (Object o1, Object o2) -> Object (o1 <> o2)
     (v1, v2) -> Array (V.fromList [v1, v2])
 
--- Sum types (constructors)
 instance (GSchema a, GSchema b) => GSchema (a :+: b) where
   gschema _ = gschema (undefined :: a p) -- Just use left constructor as example
 
--- Metadata (for data types and constructors)
 instance (GSchema a) => GSchema (M1 D c a) where
   gschema _ = gschema (undefined :: a p)
 
 instance (GSchema a) => GSchema (M1 C c a) where
   gschema _ = gschema (undefined :: a p)
 
--- Constructor arguments
 instance GSchema U1 where
   gschema _ = Object mempty
 
--- Record fields (selector metadata wrapping K1)
 instance (Selector s, Schema a) => GSchema (M1 S s (K1 i a)) where
   gschema _ =
     let fieldName = T.pack (selName (undefined :: M1 S s (K1 i a) p))
@@ -218,34 +175,23 @@ instance (Schema a) => Schema (Maybe a) where
 instance (Schema a) => Schema [a] where
   genericSchema = Array (V.singleton (genericSchema @a))
 
--- These instances are automatically derived!
+ask :: forall a. (FromJSON a, ToJSON a, Schema a) => Text -> Text -> LLM a
+ask stem input = callLLM (stem <> "\n\nInput: " <> input)
+
+ask' :: forall a. (FromJSON a, ToJSON a, Schema a) => Text -> Text -> Text -> LLM a
+ask' stem a b = callLLM (stem <> "\n\nFirst: " <> a <> "\nSecond: " <> b)
+
+data Person = Person {name :: Text, age :: Maybe Int}
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+data Analysis = Analysis {sentiment :: Text, keywords :: [Text]}
+  deriving stock (Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
 instance Schema Person
 
 instance Schema Analysis
-
--- | One-argument helper (screenshot's 'ask').
-ask ::
-  forall a.
-  (FromJSON a, ToJSON a, Schema a) =>
-  -- | Prompt stem
-  Text ->
-  -- | User input
-  Text ->
-  LLM a
-ask stem input = callLLM (stem <> "\n\nInput: " <> input)
-
--- | Two-argument helper (screenshot's 'ask'').
-ask' ::
-  forall a.
-  (FromJSON a, ToJSON a, Schema a) =>
-  -- | Prompt stem
-  Text ->
-  -- | First  argument
-  Text ->
-  -- | Second argument
-  Text ->
-  LLM a
-ask' stem a b = callLLM (stem <> "\n\nFirst: " <> a <> "\nSecond: " <> b)
 
 compareDates :: Text -> Text -> LLM Bool
 compareDates = ask' "Is the first date before the second date? Return true or false as JSON boolean."
@@ -268,16 +214,10 @@ exampleTextProcessing input = do
 
 main :: IO ()
 main = do
-  let env =
-        LLMEnv
-          { endpoint = "https://api.groq.com/openai/v1/chat/completions",
-            apiKey = "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"
-          }
-  putStrLn "Running exampleTextProcessing…"
-  (p, a, s) <-
-    runLLM env $
-      exampleTextProcessing
-        "Albert Einstein was a theoretical physicist who developed the theory of relativity."
-  print p
-  print a
-  print s
+  let env = LLMEnv {endpoint = "https://api.groq.com/openai/v1/chat/completions", apiKey = "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"}
+
+  result <- runLLM env $ adder (T.pack "2") (T.pack "5")
+  print result
+  where
+    adder :: Text -> Text -> LLM Int
+    adder = ask' "add these two numbers"
