@@ -16,7 +16,7 @@ module Main where
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, ReaderT (..), asks)
-import Data.Aeson (FromJSON, ToJSON, Value (..), eitherDecode', encode, toJSON)
+import Data.Aeson (FromJSON, ToJSON, Value (..), eitherDecode', encode)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (KeyValue ((.=)), object)
@@ -67,6 +67,54 @@ newtype GroqResponse = GroqResponse
   deriving stock (Show, Generic)
   deriving anyclass (FromJSON)
 
+class Schema a where
+  genericSchema :: Value
+  default genericSchema :: (Generic a, GSchema (Rep a)) => Value
+  genericSchema = gschema (from (undefined :: a))
+
+class GSchema f where
+  gschema :: f p -> Value
+
+instance (GSchema a, GSchema b) => GSchema (a :*: b) where
+  gschema _ = case (gschema (undefined :: a p), gschema (undefined :: b p)) of
+    (Object o1, Object o2) -> Object (o1 <> o2)
+    (v1, v2) -> Array (V.fromList [v1, v2])
+
+instance (GSchema a, GSchema b) => GSchema (a :+: b) where
+  gschema _ = gschema (undefined :: a p)
+
+instance (GSchema a) => GSchema (M1 D c a) where
+  gschema _ = gschema (undefined :: a p)
+
+instance (GSchema a) => GSchema (M1 C c a) where
+  gschema _ = gschema (undefined :: a p)
+
+instance GSchema U1 where
+  gschema _ = Object mempty
+
+instance (Selector s, Schema a) => GSchema (M1 S s (K1 i a)) where
+  gschema _ =
+    let fieldName = T.pack (selName (undefined :: M1 S s (K1 i a) p))
+        fieldValue = genericSchema @a
+     in Object (KM.singleton (K.fromText fieldName) fieldValue)
+
+instance Schema Bool where
+  genericSchema = Bool True
+
+instance Schema Text where
+  genericSchema = String "example"
+
+instance Schema Int where
+  genericSchema = Number 42
+
+instance (Schema a) => Schema (Maybe a) where
+  genericSchema = case genericSchema @a of
+    Null -> Null
+    v -> v
+
+instance (Schema a) => Schema [a] where
+  genericSchema = Array (V.singleton (genericSchema @a))
+
 callLLM ::
   forall a.
   (FromJSON a, ToJSON a, Schema a) =>
@@ -92,7 +140,7 @@ callLLM prompt = do
 
   let jsonBody =
         object
-          [ "model" .= ("llama3-8b-8192" :: Text), -- Groq model
+          [ "model" .= ("llama3-8b-8192" :: Text),
             "messages"
               .= [ object
                      [ "role" .= ("system" :: Text),
@@ -129,55 +177,6 @@ callLLM prompt = do
             case eitherDecode' (LB.fromStrict $ encodeUtf8 contentText) of
               Left e -> error ("JSON decode failed: " <> e <> "\nContent: " <> T.unpack contentText)
               Right a -> pure a
-
-class Schema a where
-  genericSchema :: Value
-  default genericSchema :: (Generic a, GSchema (Rep a)) => Value
-  genericSchema = gschema (from (undefined :: a))
-
-class GSchema f where
-  gschema :: f p -> Value
-
-instance (GSchema a, GSchema b) => GSchema (a :*: b) where
-  gschema _ = case (gschema (undefined :: a p), gschema (undefined :: b p)) of
-    (Object o1, Object o2) -> Object (o1 <> o2)
-    (v1, v2) -> Array (V.fromList [v1, v2])
-
-instance (GSchema a, GSchema b) => GSchema (a :+: b) where
-  gschema _ = gschema (undefined :: a p) -- Just use left constructor as example
-
-instance (GSchema a) => GSchema (M1 D c a) where
-  gschema _ = gschema (undefined :: a p)
-
-instance (GSchema a) => GSchema (M1 C c a) where
-  gschema _ = gschema (undefined :: a p)
-
-instance GSchema U1 where
-  gschema _ = Object mempty
-
-instance (Selector s, Schema a) => GSchema (M1 S s (K1 i a)) where
-  gschema _ =
-    let fieldName = T.pack (selName (undefined :: M1 S s (K1 i a) p))
-        fieldValue = genericSchema @a
-     in Object (KM.singleton (K.fromText fieldName) fieldValue)
-
--- Basic instances
-instance Schema Bool where
-  genericSchema = Bool True
-
-instance Schema Text where
-  genericSchema = String "example"
-
-instance Schema Int where
-  genericSchema = Number 42
-
-instance (Schema a) => Schema (Maybe a) where
-  genericSchema = case genericSchema @a of
-    Null -> Null
-    v -> v
-
-instance (Schema a) => Schema [a] where
-  genericSchema = Array (V.singleton (genericSchema @a))
 
 ask :: forall a b. (FromJSON a, ToJSON a, Schema a, ToJSON b) => Text -> b -> LLM a
 ask stem input = callLLM (stem <> "\n\nInput: " <> decodeUtf8 (LB.toStrict $ encode input))
@@ -220,26 +219,20 @@ main :: IO ()
 main = do
   let env = LLMEnv {endpoint = "https://api.groq.com/openai/v1/chat/completions", apiKey = "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"}
 
-  -- Examples with polymorphic inputs and outputs
   putStrLn "=== Polymorphic LLM Examples ==="
 
-  -- 1. Numbers in, numbers out
   result1 <- runLLM env $ adder 2 5
   putStrLn $ "2 + 5 = " <> show result1
 
-  -- 2. Lists as input
   result2 <- runLLM env $ ask @Bool "Is this list empty?" [1, 2, 3 :: Int]
   putStrLn $ "Is [1,2,3] empty? " <> show result2
 
-  -- 3. Custom types as input
   result3 <- runLLM env $ ask @Analysis "Analyze this person's data and provide sentiment and keywords" (Person "Alice" (Just 30))
   putStrLn $ "Analysis of Alice: " <> show result3
 
-  -- 4. Multiple custom types
   result4 <- runLLM env $ comparePersons (Person "Bob" (Just 25)) (Person "Charlie" (Just 40))
   putStrLn $ "Who is older? " <> show result4
 
-  -- 5. Complex nested structures
   result5 <-
     runLLM env $
       ask @Bool
@@ -247,7 +240,6 @@ main = do
         (Analysis "happy" ["joy", "excitement"])
   putStrLn $ "Is analysis positive? " <> show result5
 
-  -- 6. Original text processing example
   putStrLn "\n=== Original Text Processing Example ==="
   (person, analysis, summary) <-
     runLLM env $
