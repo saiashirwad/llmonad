@@ -1,0 +1,23 @@
+*.o
+*.hi
+*.o.boot
+*.hi.boot
+
+# Stack
+.stack-work/
+
+# Cabal
+dist/
+dist-newstyle/
+cabal.project.local
+cabal.config
+
+# GHC
+*.tix
+*.hp
+
+# Other common ignores
+TAGS
+cabal.sandbox.config
+*.swp
+*.swo
