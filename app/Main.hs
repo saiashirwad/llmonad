@@ -81,10 +81,14 @@ callLLM prompt = do
       systemPrompt =
         "You are a JSON generator. Return ONLY valid JSON that matches this exact structure. "
           <> "No explanations, no markdown, no code blocks, just the raw JSON. "
-          <> "IMPORTANT: For primitive types (string, number, boolean), return just the raw value, not wrapped in an object. "
+          <> "CRITICAL: If the example is a primitive JSON value (like \"example\", 42, true), return ONLY a primitive value, NOT wrapped in an object. "
+          <> "If the example is \"example\", return something like \"Charlie\" (with quotes for strings). "
+          <> "If the example is 42, return something like 7 (without quotes for numbers). "
+          <> "If the example is true, return true or false (without quotes for booleans). "
           <> "For objects, return ONLY the fields shown in the example, with the exact same names. "
           <> "Example of expected format: "
           <> exampleJson
+          <> "\n\nThe user will provide a task and inputs. Complete the task and return the result in the exact format shown above."
 
   let jsonBody =
         object
@@ -175,11 +179,11 @@ instance (Schema a) => Schema (Maybe a) where
 instance (Schema a) => Schema [a] where
   genericSchema = Array (V.singleton (genericSchema @a))
 
-ask :: forall a. (FromJSON a, ToJSON a, Schema a) => Text -> Text -> LLM a
-ask stem input = callLLM (stem <> "\n\nInput: " <> input)
+ask :: forall a b. (FromJSON a, ToJSON a, Schema a, ToJSON b) => Text -> b -> LLM a
+ask stem input = callLLM (stem <> "\n\nInput: " <> decodeUtf8 (LB.toStrict $ encode input))
 
-ask' :: forall a. (FromJSON a, ToJSON a, Schema a) => Text -> Text -> Text -> LLM a
-ask' stem a b = callLLM (stem <> "\n\nFirst: " <> a <> "\nSecond: " <> b)
+ask' :: forall a b c. (FromJSON a, ToJSON a, Schema a, ToJSON b, ToJSON c) => Text -> b -> c -> LLM a
+ask' stem a b = callLLM (stem <> "\n\nFirst: " <> decodeUtf8 (LB.toStrict $ encode a) <> "\nSecond: " <> decodeUtf8 (LB.toStrict $ encode b))
 
 data Person = Person {name :: Text, age :: Maybe Int}
   deriving stock (Show, Generic)
@@ -216,8 +220,44 @@ main :: IO ()
 main = do
   let env = LLMEnv {endpoint = "https://api.groq.com/openai/v1/chat/completions", apiKey = "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"}
 
-  result <- runLLM env $ adder (T.pack "2") (T.pack "5")
-  print result
+  -- Examples with polymorphic inputs and outputs
+  putStrLn "=== Polymorphic LLM Examples ==="
+
+  -- 1. Numbers in, numbers out
+  result1 <- runLLM env $ adder 2 5
+  putStrLn $ "2 + 5 = " <> show result1
+
+  -- 2. Lists as input
+  result2 <- runLLM env $ ask @Bool "Is this list empty?" [1, 2, 3 :: Int]
+  putStrLn $ "Is [1,2,3] empty? " <> show result2
+
+  -- 3. Custom types as input
+  result3 <- runLLM env $ ask @Analysis "Analyze this person's data and provide sentiment and keywords" (Person "Alice" (Just 30))
+  putStrLn $ "Analysis of Alice: " <> show result3
+
+  -- 4. Multiple custom types
+  result4 <- runLLM env $ comparePersons (Person "Bob" (Just 25)) (Person "Charlie" (Just 40))
+  putStrLn $ "Who is older? " <> show result4
+
+  -- 5. Complex nested structures
+  result5 <-
+    runLLM env $
+      ask @Bool
+        "Does this analysis indicate positivity?"
+        (Analysis "happy" ["joy", "excitement"])
+  putStrLn $ "Is analysis positive? " <> show result5
+
+  -- 6. Original text processing example
+  putStrLn "\n=== Original Text Processing Example ==="
+  (person, analysis, summary) <-
+    runLLM env $
+      exampleTextProcessing "Albert Einstein was a theoretical physicist who developed the theory of relativity."
+  print person
+  print analysis
+  print summary
   where
-    adder :: Text -> Text -> LLM Int
+    adder :: Int -> Int -> LLM Int
     adder = ask' "add these two numbers"
+
+    comparePersons :: Person -> Person -> LLM Text
+    comparePersons = ask' "Compare these two people and return the name of the older one"
