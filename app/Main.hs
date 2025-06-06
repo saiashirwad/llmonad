@@ -64,7 +64,7 @@ runLLM env = flip runReaderT env . unLLM
 newtype GroqChoice = GroqChoice
   { message :: GroqMessage
   }
-  deriving stock (Show, Generic)
+  deriving (Show, Generic)
   deriving anyclass (FromJSON)
 
 newtype GroqMessage = GroqMessage
@@ -204,12 +204,10 @@ ask' stem a b =
    in callLLM fullPrompt
 
 data Person = Person {name :: Text, age :: Maybe Int}
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving (Show, Generic, FromJSON, ToJSON)
 
 data Analysis = Analysis {sentiment :: Text, keywords :: [Text]}
-  deriving stock (Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving (Show, Generic, FromJSON, ToJSON)
 
 instance Schema Person
 
