@@ -27,6 +27,17 @@ import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Vector qualified as V
 import GHC.Generics
+  ( C,
+    D,
+    Generic (Rep, from),
+    K1,
+    M1,
+    S,
+    Selector (selName),
+    U1,
+    type (:*:),
+    type (:+:),
+  )
 import Network.HTTP.Simple
   ( getResponseBody,
     getResponseStatusCode,
@@ -36,6 +47,7 @@ import Network.HTTP.Simple
     setRequestHeader,
     setRequestMethod,
   )
+import System.Environment (getEnv)
 
 data LLMEnv = LLMEnv
   { endpoint :: String,
@@ -196,60 +208,26 @@ instance Schema Person
 
 instance Schema Analysis
 
-compareDates :: Text -> Text -> LLM Bool
-compareDates = ask' "Is the first date before the second date? Return true or false as JSON boolean."
+olderPerson :: Person -> Person -> LLM Person
+olderPerson = ask' "Compare these two people and return the the older person"
 
-summarize :: Text -> LLM Text
-summarize = ask "Summarize this text in one sentence. Return as JSON string."
-
-extractPersonInfo :: Text -> LLM Person
-extractPersonInfo = ask "Extract person information from this text."
-
-analyzeTextSentiment :: Text -> LLM Analysis
-analyzeTextSentiment = ask "Analyze this text for sentiment and keywords."
-
-exampleTextProcessing :: Text -> LLM (Person, Analysis, Text)
-exampleTextProcessing input = do
-  person <- extractPersonInfo input
-  sentiment <- analyzeTextSentiment input
-  summary <- summarize input
-  pure (person, sentiment, summary)
+adder :: Int -> Int -> LLM Int
+adder = ask' "add these two numbers"
 
 main :: IO ()
 main = do
-  let env = LLMEnv {endpoint = "https://api.groq.com/openai/v1/chat/completions", apiKey = "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"}
+  apiKey <- T.pack <$> getEnv "GROQ_API_KEY"
+  let env = LLMEnv {endpoint = "https://api.groq.com/openai/v1/chat/completions", apiKey = apiKey}
 
-  putStrLn "=== Polymorphic LLM Examples ==="
+  let exec = runLLM env
 
-  result1 <- runLLM env $ adder 2 5
-  putStrLn $ "2 + 5 = " <> show result1
+  result1 <- exec $ adder 2 5
+  print result1
 
-  result2 <- runLLM env $ ask @Bool "Is this list empty?" [1, 2, 3 :: Int]
-  putStrLn $ "Is [1,2,3] empty? " <> show result2
+  result2 <- exec $ ask @Bool "Is this list empty?" [1, 2, 3 :: Int]
+  print result2
 
-  result3 <- runLLM env $ ask @Analysis "Analyze this person's data and provide sentiment and keywords" (Person "Alice" (Just 30))
-  putStrLn $ "Analysis of Alice: " <> show result3
-
-  result4 <- runLLM env $ comparePersons (Person "Bob" (Just 25)) (Person "Charlie" (Just 40))
-  putStrLn $ "Who is older? " <> show result4
-
-  result5 <-
-    runLLM env $
-      ask @Bool
-        "Does this analysis indicate positivity?"
-        (Analysis "happy" ["joy", "excitement"])
-  putStrLn $ "Is analysis positive? " <> show result5
-
-  putStrLn "\n=== Original Text Processing Example ==="
-  (person, analysis, summary) <-
-    runLLM env $
-      exampleTextProcessing "Albert Einstein was a theoretical physicist who developed the theory of relativity."
-  print person
-  print analysis
-  print summary
-  where
-    adder :: Int -> Int -> LLM Int
-    adder = ask' "add these two numbers"
-
-    comparePersons :: Person -> Person -> LLM Text
-    comparePersons = ask' "Compare these two people and return the name of the older one"
+  let bob = Person "Bob" (Just 25)
+  let charlie = Person "Charlie" (Just 40)
+  result4 <- exec $ olderPerson bob charlie
+  print result4
