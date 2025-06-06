@@ -219,15 +219,12 @@ main = do
   apiKey <- T.pack <$> getEnv "GROQ_API_KEY"
   let env = LLMEnv {endpoint = "https://api.groq.com/openai/v1/chat/completions", apiKey = apiKey}
 
-  let exec = runLLM env
+  let exec x = runLLM env x >>= print
 
-  result1 <- exec $ adder 2 5
-  print result1
+  exec $ adder 2 5
 
-  result2 <- exec $ ask @Bool "Is this list empty?" [1, 2, 3 :: Int]
-  print result2
+  exec $ ask @Bool "Is this list empty?" [1, 2, 3 :: Int]
 
   let bob = Person "Bob" (Just 25)
   let charlie = Person "Charlie" (Just 40)
-  result4 <- exec $ olderPerson bob charlie
-  print result4
+  exec $ olderPerson bob charlie
