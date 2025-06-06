@@ -191,10 +191,17 @@ callLLM prompt = do
               Right a -> pure a
 
 ask :: forall a b. (FromJSON a, ToJSON a, Schema a, ToJSON b) => Text -> b -> LLM a
-ask stem input = callLLM (stem <> "\n\nInput: " <> decodeUtf8 (LB.toStrict $ encode input))
+ask stem input =
+  let encodedInput = decodeUtf8 (LB.toStrict $ encode input)
+      fullPrompt = stem <> "\n\nInput: " <> encodedInput
+   in callLLM fullPrompt
 
 ask' :: forall a b c. (FromJSON a, ToJSON a, Schema a, ToJSON b, ToJSON c) => Text -> b -> c -> LLM a
-ask' stem a b = callLLM (stem <> "\n\nFirst: " <> decodeUtf8 (LB.toStrict $ encode a) <> "\nSecond: " <> decodeUtf8 (LB.toStrict $ encode b))
+ask' stem a b =
+  let firstEncoded = decodeUtf8 (LB.toStrict $ encode a)
+      secondEncoded = decodeUtf8 (LB.toStrict $ encode b)
+      fullPrompt = stem <> "\n\nFirst: " <> firstEncoded <> "\nSecond: " <> secondEncoded
+   in callLLM fullPrompt
 
 data Person = Person {name :: Text, age :: Maybe Int}
   deriving stock (Show, Generic)
