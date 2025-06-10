@@ -2,7 +2,6 @@
 *.hi
 *.o.boot
 *.hi.boot
-AGENT.md
 
 # Stack
 .stack-work/
