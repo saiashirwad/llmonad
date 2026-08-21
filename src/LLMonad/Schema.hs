@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -35,6 +36,9 @@
 module LLMonad.Schema
   ( -- * The class
     ToSchema (..)
+  , HasSchema
+  , schema
+  , schemaName
 
     -- * Refining derived schemas
   , withDescription
@@ -60,9 +64,8 @@ import Data.Scientific (Scientific)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Typeable (Typeable, typeRep, typeRepTyCon)
+import Data.Typeable (Typeable, tyConName, typeRep, typeRepTyCon)
 import Data.Vector qualified as V
-import Data.Word (Word)
 import GHC.Generics
   ( (:*:) (..)
   , (:+:)
@@ -73,7 +76,7 @@ import GHC.Generics
   , Generic (..)
   , K1 (..)
   , M1 (..)
-  , S1
+  , S
   , Selector (..)
   , U1 (..)
   , V1
@@ -109,6 +112,17 @@ class ToSchema a where
   schemaDescription :: Text
   schemaDescription = ""
 
+-- | Typeclass synonym matching project specification.
+type HasSchema = ToSchema
+
+-- | Retrieve the JSON Schema for a type with HasSchema.
+schema :: forall a. HasSchema a => Value
+schema = toSchema @a
+
+-- | Retrieve the schema name for a type with HasSchema.
+schemaName :: forall a. HasSchema a => Text
+schemaName = schemaTypeName @a
+
 --------------------------------------------------------------------------------
 -- Refinements
 --------------------------------------------------------------------------------
@@ -121,7 +135,11 @@ withDescription _ v = v
 -- | Attach descriptions to named properties of an object schema. Great for
 -- nudging models about field semantics without changing your types.
 describeProperties :: [(Text, Text)] -> Value -> Value
-describeProperties descs (Object o) = Object (foldl' step o descs)
+describeProperties descs (Object o) = case KM.lookup (Key.fromText "properties") o of
+  Just (Object props) ->
+    let props' = foldl' step props descs
+     in Object (KM.insert (Key.fromText "properties") (Object props') o)
+  _ -> Object o
   where
     step acc (k, d) = case KM.lookup (Key.fromText k) acc of
       Just (Object po) ->
@@ -199,29 +217,37 @@ instance ToSchema () where toSchema = typedSchema "null"
 -- | Any JSON value at all.
 instance ToSchema Value where toSchema = object []
 
-instance {-# OVERLAPPABLE #-} ToSchema a => ToSchema [a] where
+instance {-# OVERLAPPABLE #-} (ToSchema a, Typeable a) => ToSchema [a] where
   toSchema = arrayOf (toSchema @a)
+  schemaTypeName = "Array"
 
-instance ToSchema a => ToSchema (Maybe a) where
+instance (ToSchema a, Typeable a) => ToSchema (Maybe a) where
   toSchema = nullable (toSchema @a)
+  schemaTypeName = "Optional"
 
-instance ToSchema a => ToSchema (NonEmpty a) where
+instance (ToSchema a, Typeable a) => ToSchema (NonEmpty a) where
   toSchema = object ["type" .= ("array" :: Text), "items" .= toSchema @a, "minItems" .= (1 :: Int)]
+  schemaTypeName = "NonEmptyArray"
 
-instance (ToSchema a, Ord a) => ToSchema (Set.Set a) where
+instance (ToSchema a, Ord a, Typeable a) => ToSchema (Set.Set a) where
   toSchema = object ["type" .= ("array" :: Text), "items" .= toSchema @a, "uniqueItems" .= True]
+  schemaTypeName = "Set"
 
-instance ToSchema v => ToSchema (Map.Map Text v) where
+instance (ToSchema v, Typeable v) => ToSchema (Map.Map Text v) where
   toSchema = object ["type" .= ("object" :: Text), "additionalProperties" .= toSchema @v]
+  schemaTypeName = "Map"
 
-instance (ToSchema a, ToSchema b) => ToSchema (a, b) where
+instance (ToSchema a, ToSchema b, Typeable a, Typeable b) => ToSchema (a, b) where
   toSchema = arraySchema [toSchema @a, toSchema @b]
+  schemaTypeName = "Tuple2"
 
-instance (ToSchema a, ToSchema b, ToSchema c) => ToSchema (a, b, c) where
+instance (ToSchema a, ToSchema b, ToSchema c, Typeable a, Typeable b, Typeable c) => ToSchema (a, b, c) where
   toSchema = arraySchema [toSchema @a, toSchema @b, toSchema @c]
+  schemaTypeName = "Tuple3"
 
-instance (ToSchema a, ToSchema b, ToSchema c, ToSchema d) => ToSchema (a, b, c, d) where
+instance (ToSchema a, ToSchema b, ToSchema c, ToSchema d, Typeable a, Typeable b, Typeable c, Typeable d) => ToSchema (a, b, c, d) where
   toSchema = arraySchema [toSchema @a, toSchema @b, toSchema @c, toSchema @d]
+  schemaTypeName = "Tuple4"
 
 --------------------------------------------------------------------------------
 -- Generic machinery

@@ -1,203 +1,150 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
+-- | A guided tour of everything LLMonad can do. Point it at any provider:
+--
+-- > export OPENAI_API_KEY=sk-...   ./llmonad-demo        # or
+-- > export GROQ_API_KEY=gsk_...    ./llmonad-demo        # or
+-- > export ANTHROPIC_API_KEY=...   ./llmonad-demo        # or
+-- > ollama serve && ./llmonad-demo                       # local, no key
+--
+-- @LLMONAD_MODEL@ overrides the default model for the chosen provider.
 module Main where
 
+import Control.Exception (try)
 import Data.Aeson (FromJSON, ToJSON)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import Effectful
 import GHC.Generics (Generic)
 import LLMonad
 import System.Environment (lookupEnv)
+import System.Exit (exitFailure)
+import System.IO (hFlush, stdout)
 
--- ============================================================================
--- Domain Types for Structured Output Extraction
--- ============================================================================
+--------------------------------------------------------------------------------
+-- Pick a provider from the environment
+--------------------------------------------------------------------------------
 
-data Sentiment = Positive | Neutral | Negative
-  deriving (Show, Eq, Generic, FromJSON, ToJSON, HasSchema)
+pickConfig :: IO (Maybe LLMConfig)
+pickConfig = do
+  model <- fmap T.pack <$> lookupEnv "LLMONAD_MODEL"
+  let withDefault def = Model (fromMaybe def model)
+  tryKeys
+    [ ("ANTHROPIC_API_KEY", \k -> defaultConfig (anthropicProvider (T.pack k)) (withDefault "claude-sonnet-4-5"))
+    , ("OPENAI_API_KEY", \k -> defaultConfig (openAIProvider (T.pack k)) (withDefault "gpt-4o-mini"))
+    , ("GROQ_API_KEY", \k -> defaultConfig (groqProvider (T.pack k)) (withDefault "llama-3.3-70b-versatile"))
+    , ("OPENROUTER_API_KEY", \k -> defaultConfig (openRouterProvider (T.pack k)) (withDefault "openai/gpt-4o-mini"))
+    , ("DEEPSEEK_API_KEY", \k -> defaultConfig (deepSeekProvider (T.pack k)) (withDefault "deepseek-chat"))
+    ]
+    >>= \case
+      Just cfg -> pure (Just cfg)
+      Nothing -> do
+        host <- lookupEnv "OLLAMA_HOST"
+        pure $ case host of
+          Just h -> Just (defaultConfig (ollamaProvider (T.pack h)) (withDefault "llama3.2"))
+          Nothing -> Nothing
+  where
+    tryKeys [] = pure Nothing
+    tryKeys ((var, mk) : rest) =
+      lookupEnv var >>= \case
+        Just k | not (null k) -> pure (Just (mk k))
+        _ -> tryKeys rest
 
-data CodeReview = CodeReview
-  { summary :: Text,
-    sentiment :: Sentiment,
-    issuesFound :: [Text],
-    qualityScore :: Int -- 1 to 10
+--------------------------------------------------------------------------------
+-- Demo types
+--------------------------------------------------------------------------------
+
+data Sentiment = Positive | Negative | Mixed | Neutral
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
+
+data ReviewVerdict = ReviewVerdict
+  { title :: Text
+  , sentiment :: Sentiment
+  , score :: Double
+  , keywords :: [Text]
   }
-  deriving (Show, Eq, Generic, FromJSON, ToJSON, HasSchema)
-
-data UserProfile = UserProfile
-  { name :: Text,
-    age :: Maybe Int,
-    skills :: [Text],
-    location :: Text
-  }
-  deriving (Show, Eq, Generic, FromJSON, ToJSON, HasSchema)
-
--- ============================================================================
--- Tool Definitions for Autonomous ReAct Agent
--- ============================================================================
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
 data CalcArgs = CalcArgs
-  { operation :: Text, -- "add", "sub", "mul", "div"
-    a :: Double,
-    b :: Double
+  { operation :: Text
+  , a :: Double
+  , b :: Double
   }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+  deriving (Show, Generic, FromJSON, ToSchema)
 
-data CalcResult = CalcResult
-  { calculationResult :: Double
-  }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+calculator :: Tool
+calculator =
+  mkTool "calculator" "Evaluate arithmetic: operation is one of add, subtract, multiply, divide" $ \(args :: CalcArgs) ->
+    pure $ case operation args of
+      "add" -> a args + b args
+      "subtract" -> a args - b args
+      "multiply" -> a args * b args
+      _ -> a args / b args -- divide (and anything else)
 
-calculatorTool :: Tool
-calculatorTool =
-  defToolSync
-    "calculator"
-    "Perform basic arithmetic calculations (operation: add, sub, mul, div; a: number; b: number)"
-    ( \(CalcArgs op numA numB) ->
-        case op of
-          "add" -> CalcResult (numA + numB)
-          "sub" -> CalcResult (numA - numB)
-          "mul" -> CalcResult (numA * numB)
-          "div" -> CalcResult (if numB /= 0 then numA / numB else 0.0)
-          _ -> CalcResult 0.0
-    )
+--------------------------------------------------------------------------------
+-- Demos
+--------------------------------------------------------------------------------
 
-data WeatherArgs = WeatherArgs
-  { city :: Text
-  }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+demoStreaming :: (LLM :> es, IOE :> es) => Eff es ()
+demoStreaming = do
+  setSystem "You write in one short paragraph, no preamble."
+  _ <- streamText (\t -> TIO.putStr t >> hFlush stdout) "Explain monads to a tired Ruby developer."
+  liftIO (putStrLn "\n")
 
-data WeatherResult = WeatherResult
-  { cityReport :: Text,
-    temperatureCelsius :: Double,
-    condition :: Text
-  }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+demoTypedAsk :: (LLM :> es, IOE :> es) => Eff es ()
+demoTypedAsk = do
+  let review :: Text
+      review = "Chainsaw Massacre 9 was, against all odds, tender. The gore is minimal, \
+               \the pacing patient, and by the end I cared about the sheriff."
+  verdict <- ask @ReviewVerdict ("Extract structured data from this movie review:\n" <> review)
+  liftIO (print verdict)
 
-weatherTool :: Tool
-weatherTool =
-  defToolSync
-    "get_weather"
-    "Get the current weather forecast for a given city name"
-    ( \(WeatherArgs cityName) ->
-        WeatherResult
-          { cityReport = cityName,
-            temperatureCelsius = 22.5,
-            condition = "Sunny and clear"
-          }
-    )
+demoMemory :: (LLM :> es, IOE :> es) => Eff es ()
+demoMemory = do
+  setSystem "You are terse."
+  _ <- generateText "Remember this code word for later: 'quokka'. Just acknowledge."
+  reply <- generateText "What was the code word I told you?"
+  liftIO (TIO.putStrLn ("model remembers: " <> reply))
 
--- ============================================================================
--- Main Program
--- ============================================================================
+demoTools :: (LLM :> es, IOE :> es) => Eff es ()
+demoTools = do
+  answer <- useTools [calculator] "Use the calculator tool to compute 17 * 23 - 4, then tell me the result."
+  liftIO (TIO.putStrLn answer)
+
+--------------------------------------------------------------------------------
+-- Main
+--------------------------------------------------------------------------------
 
 main :: IO ()
-main = do
-  putStrLn "========================================================"
-  putStrLn "   LLMonad: Type-Safe Haskell DSL for Language Models   "
-  putStrLn "========================================================"
+main = pickConfig >>= \case
+  Nothing -> do
+    putStrLn "No provider configured. Set one of:"
+    putStrLn "  ANTHROPIC_API_KEY / OPENAI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY"
+    putStrLn "  or OLLAMA_HOST=http://localhost:11434 for a local model."
+    putStrLn "Optionally set LLMONAD_MODEL to override the default model."
+    exitFailure
+  Just cfg -> do
+    putStrLn ("=== llmonad demo — provider: " <> T.unpack (providerName (configProvider cfg)) <> ", model: " <> show (configModel cfg) <> " ===\n")
 
-  -- Detect available API keys: DeepSeek, OpenAI, Anthropic, OpenRouter, or fallback to Ollama
-  deepseekKey <- lookupEnv "DEEPSEEK_API_KEY"
-  openaiKey <- lookupEnv "OPENAI_API_KEY"
-  anthropicKey <- lookupEnv "ANTHROPIC_API_KEY"
-  openrouterKey <- lookupEnv "OPENROUTER_API_KEY"
+    runDemo "1. streaming" (runEff (runLLMHTTP cfg demoStreaming))
+    runDemo "2. typed ask" (runEff (runLLMHTTP cfg demoTypedAsk))
+    runDemo "3. conversation memory" (runEff (runLLMHTTP cfg demoMemory))
+    runDemo "4. tools" (runEff (runLLMHTTP cfg demoTools))
 
-  let (providerDesc, config) = case (deepseekKey, openaiKey, anthropicKey, openrouterKey) of
-        (Just k, _, _, _) ->
-          ("DeepSeek (deepseek-chat)", defaultConfig (deepseek (T.pack k)))
-        (_, Just k, _, _) ->
-          ("OpenAI (gpt-4o-mini)", defaultConfig (openai (T.pack k)))
-        (_, _, Just k, _) ->
-          ("Anthropic (claude-3-5-sonnet)", defaultConfig (anthropic (T.pack k)))
-        (_, _, _, Just k) ->
-          ("OpenRouter (deepseek/deepseek-chat)", defaultConfig (openrouter (T.pack k)))
-        (Nothing, Nothing, Nothing, Nothing) ->
-          ("Ollama (Local at localhost:11434)", defaultConfig ollama)
-
-  putStrLn $ "Active Provider: " <> providerDesc
-  putStrLn ""
-
-  let hasKey =
-        isJust deepseekKey
-          || isJust openaiKey
-          || isJust anthropicKey
-          || isJust openrouterKey
-
-  if not hasKey
-    then do
-      putStrLn "Note: No DEEPSEEK_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY set."
-      putStrLn "Ensure Ollama is running at http://localhost:11434 or set an API key."
-      putStrLn ""
-    else pure ()
-
-  -- --------------------------------------------------------------------------
-  -- 1. Conversational Chat & Prompt DSL
-  -- --------------------------------------------------------------------------
-  putStrLn "[1] Demonstrating Monadic Chat DSL..."
-  let chatProgram :: LLM ()
-      chatProgram = do
-        ans1 <- ask "In one short sentence, what is Haskell?"
-        liftIO $ TIO.putStrLn $ "Response: " <> ans1
-        ans2 <- ask "What is its biggest strength?"
-        liftIO $ TIO.putStrLn $ "Follow-up: " <> ans2
-
-  chatRes <- runLLM config chatProgram
-  case chatRes of
-    Left err -> putStrLn $ "Execution note (check network/API key): " <> show err
-    Right () -> putStrLn "Chat completed successfully."
-  putStrLn ""
-
-  -- --------------------------------------------------------------------------
-  -- 2. Type-Driven Structured Output Extraction
-  -- --------------------------------------------------------------------------
-  putStrLn "[2] Demonstrating Structured Output Extraction..."
-  let extractionProgram :: LLM ()
-      extractionProgram = do
-        let profilePrompt =
-              "Extract information: Alice is a 29-year-old senior Haskell engineer in Berlin specializing in compilers and distributed systems."
-        profile :: UserProfile <- askStructured profilePrompt
-        liftIO $ do
-          putStrLn "Extracted Haskell UserProfile record:"
-          print profile
-
-        let codeSnippet =
-              "Review this code: 'def div(a, b): return a / b' - lacks zero division check."
-        review :: CodeReview <- askStructured codeSnippet
-        liftIO $ do
-          putStrLn "Extracted CodeReview record:"
-          print review
-
-  structRes <- runLLM (withTemperature 0.0 config) extractionProgram
-  case structRes of
-    Left err -> putStrLn $ "Extraction note: " <> show err
-    Right () -> putStrLn "Structured extraction succeeded."
-  putStrLn ""
-
-  -- --------------------------------------------------------------------------
-  -- 3. Autonomous ReAct Agent with Tool Execution Loop
-  -- --------------------------------------------------------------------------
-  putStrLn "[3] Demonstrating ReAct Agent with Tools..."
-  let agentProgram :: LLM ()
-      agentProgram = do
-        let tools = [calculatorTool, weatherTool]
-            agentPrompt =
-              "What is the weather in Tokyo, and what is 42 multiplied by 137?"
-        agentAns <- runAgentWith tools agentPrompt
-        liftIO $ TIO.putStrLn $ "Agent Final Answer:\n" <> agentAns
-
-  agentRes <- runLLM config agentProgram
-  case agentRes of
-    Left err -> putStrLn $ "Agent note: " <> show err
-    Right () -> putStrLn "Agent execution finished."
-  putStrLn ""
-
-  putStrLn "========================================================"
-  putStrLn "   LLMonad demonstration completed successfully!        "
-  putStrLn "========================================================"
+runDemo :: Text -> IO () -> IO ()
+runDemo label act = do
+  putStrLn ("--- " <> T.unpack label <> " ---")
+  r <- try act
+  case r of
+    Right () -> putStrLn ""
+    Left e -> putStrLn ("  !! " <> T.unpack (prettyError e) <> "\n")

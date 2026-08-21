@@ -33,6 +33,7 @@ module LLMonad.Types
   , StreamEvent (..)
   ) where
 
+import Control.Applicative ((<|>))
 import Data.Aeson (Value)
 import Data.String (IsString)
 import Data.Text (Text)
@@ -53,17 +54,17 @@ data ToolCall = ToolCall
   , toolCallName :: Text
   , toolCallArguments :: Value
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | A single message in a conversation, covering every role and the
 -- tool-calling shapes of both supported protocols.
 data ChatMessage
   = SystemMsg Text
   | UserMsg Text
-  | AssistantMsg {assistantText :: Text, assistantToolCalls :: [ToolCall]}
+  | AssistantMsg Text [ToolCall]
   | -- | Result of executing a tool call (@toolCallId@ ties it back).
-    ToolMsg {toolMsgCallId :: Text, toolMsgContent :: Text}
-  deriving (Eq, Show)
+    ToolMsg Text Text
+  deriving (Eq, Ord, Show)
 
 -- | Sampling and request parameters. Every field is optional; unset fields
 -- are simply omitted from the wire request, deferring to provider defaults.
@@ -76,7 +77,7 @@ data Params = Params
     -- this window). Defaults to a generous 300s.
     paramTimeoutSeconds :: Maybe Int
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | All-nothing parameters.
 defaultParams :: Params
@@ -105,12 +106,8 @@ data ResponseFormat
   | -- | JSON conforming to a named JSON Schema. Providers that support
     -- native structured output enforce this server-side; others get a
     -- best-effort downgrade (see the provider modules).
-    RfJsonSchema
-      { rfName :: Text
-      , rfSchema :: Value
-      , rfStrict :: Bool
-      }
-  deriving (Eq, Show)
+    RfJsonSchema Text Value Bool
+  deriving (Eq, Ord, Show)
 
 -- | A tool advertised to the model (its name, description, and JSON Schema
 -- for arguments). Built for you by 'LLMonad.Tools.mkTool'.
@@ -119,7 +116,7 @@ data ToolSpec = ToolSpec
   , toolSpecDescription :: Text
   , toolSpecParameters :: Value
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | Who decides when a tool is called.
 data ToolChoice
@@ -128,7 +125,7 @@ data ToolChoice
   | -- | Force a specific tool by name (used for structured output on
     -- Anthropic).
     ToolForce Text
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | A fully specified, provider-neutral completion request.
 data CompletionRequest = CompletionRequest
@@ -151,21 +148,27 @@ data FinishReason
   | FrToolUse
   | FrContentFilter
   | FrOther Text
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | Token accounting, when the provider reports it.
 data Usage = Usage
   { usageInputTokens :: Int
   , usageOutputTokens :: Int
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 -- | The model's final answer to a request.
 data CompletionResponse = CompletionResponse
-  { -- | Assistant text (for structured output: the JSON payload).
+  { -- | Assistant text (for structured output: the JSON payload, when the
+    -- provider delivered it as text).
     crspText :: Text
   , -- | Tool invocations the model asked for, in order.
     crspToolCalls :: [ToolCall]
+  , -- | Structured output delivered out-of-band (e.g. Anthropic returns
+    -- the JSON inside a forced @tool_use@ block). When present,
+    -- 'LLMonad.Core.ask' decodes this directly instead of parsing
+    -- 'crspText'.
+    crspStructuredPayload :: Maybe Value
   , crspFinishReason :: FinishReason
   , crspUsage :: Maybe Usage
   }

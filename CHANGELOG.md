@@ -1,5 +1,46 @@
 # Revision history for llmonad
 
-## 0.1.0.0 -- YYYY-mm-dd
+## 0.2.0.0 -- 2026-08-21
+
+A ground-up rebuild of the toy 0.1 prototype into a proper DSL.
+
+**Added**
+
+- Typed structured output: `ask @MyType "..."` derives a real JSON Schema
+  from your type (`ToSchema`, generic derivation), has it enforced
+  server-side where possible, and returns a decoded Haskell value.
+- Provider abstraction (`Provider` as a record of functions) with two
+  transports:
+  - `LLMonad.Providers.OpenAICompatible`: OpenAI, Groq, DeepSeek, Mistral,
+    Together, OpenRouter, Ollama, LM Studio — with an automatic
+    structured-output downgrade ladder (strict `json_schema` → non-strict →
+    `json_object` → prompt-only).
+  - `LLMonad.Providers.Anthropic`: native Messages API, structured output
+    via forced tool-use.
+- Conversation memory: calls inside an `LLM` block share history;
+  `runLLMConversation` persists/resumes conversations.
+- Tool calling with typed tools (`mkTool`) and a ready-made agent loop
+  (`useTools`).
+- Token streaming over SSE for both protocols.
+- Composable error handling: a typed `LLMError` hierarchy (no more `error`
+  calls), `attempt`, and `retry` with exponential backoff.
+- Tracing hooks (`withTrace`) and token usage reporting.
+- A real test suite (schema derivation, SSE parsing, JSON extraction,
+  request/response shapes, agent loop, retries) running against scripted
+  mock providers — no network needed.
+
+**Changed**
+
+- `ask` now takes just an instruction; interpolate inputs with `embed`.
+  The old two-input `ask'` is gone — use `<>`.
+- `Schema` renamed to `ToSchema` and now produces actual JSON Schema
+  documents instead of fake example values.
+- Project layout moved from `lib/` to `src/`.
+
+**Removed**
+
+- The hardcoded Groq-only client.
+
+## 0.1.0.0 -- 2025
 
 * First version. Released on an unsuspecting world.

@@ -22,7 +22,7 @@ import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 
 -- | Accumulated parser state: bytes not yet consumed plus pending data lines.
-newtype SSEParser = SSEParser {sseBuffer :: ByteString}
+newtype SSEParser = SSEParser ByteString
   deriving (Eq)
 
 -- | A fresh parser.
@@ -71,7 +71,7 @@ dispatch lines0 = reverse (go lines0 [] [])
           case breakColon ln of
             Nothing -> go rest curData accEvents
             Just (field, val)
-              | field == "data" -> go rest (decodeLenient (stripLeadingSpace val) : curData) accEvents
+              | field == "data" -> go rest (stripLeadingSpace val : curData) accEvents
               | otherwise -> go rest curData accEvents -- event:, id:, retry: ignored
     flush rest curData accEvents =
       case reverse curData of

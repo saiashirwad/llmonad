@@ -1,4 +1,7 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -Wno-partial-fields #-}
 
 -- | The error type for everything that can go wrong while talking to an LLM.
 --
