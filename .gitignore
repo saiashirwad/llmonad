@@ -2,6 +2,8 @@
 *.hi
 *.o.boot
 *.hi.boot
+*.dyn_o
+*.dyn_hi
 
 # Stack
 .stack-work/
@@ -15,6 +17,10 @@ cabal.config
 # GHC
 *.tix
 *.hp
+
+# Agent and Temp Directories
+.agents/
+.agents
 
 # Other common ignores
 TAGS
