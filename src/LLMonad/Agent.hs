@@ -37,11 +37,11 @@ import LLMonad.Tools (AgentOpts (..), Tool (..), defaultAgentOpts)
 import LLMonad.Types
 
 -- | Run autonomous ReAct agent loop.
-runAgent :: (LLM :> es, IOE :> es) => [Tool] -> Text -> Eff es Text
+runAgent :: (LLM :> es, IOE :> es) => [Tool (Eff es)] -> Text -> Eff es Text
 runAgent = runAgentWith defaultAgentOpts
 
 -- | Run autonomous ReAct agent loop with custom options.
-runAgentWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool] -> Text -> Eff es Text
+runAgentWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
 runAgentWith opts tools instruction = do
   pushMessage (UserMsg instruction)
   loop (agentMaxRounds opts) []
@@ -64,7 +64,7 @@ runAgentWith opts tools instruction = do
                   loop (roundsLeft - 1) currentSignatures
 
 -- | Run autonomous ReAct agent loop returning structured output.
-runAgentStructured :: forall a es. (LLM :> es, IOE :> es, FromJSON a, ToSchema a) => [Tool] -> Text -> Eff es a
+runAgentStructured :: forall a es. (LLM :> es, IOE :> es, FromJSON a, ToSchema a) => [Tool (Eff es)] -> Text -> Eff es a
 runAgentStructured = runAgentStructuredWith defaultAgentOpts
 
 -- | Run autonomous ReAct agent loop returning structured output with custom options.
@@ -72,7 +72,7 @@ runAgentStructuredWith ::
   forall a es.
   (LLM :> es, IOE :> es, FromJSON a, ToSchema a) =>
   AgentOpts ->
-  [Tool] ->
+  [Tool (Eff es)] ->
   Text ->
   Eff es a
 runAgentStructuredWith opts tools instruction = do
@@ -112,7 +112,7 @@ runAgentStructuredWith opts tools instruction = do
                   loop (roundsLeft - 1) currentSignatures
 
 -- | Execute a single tool call and record the result message into conversation history.
-executeAndRecord :: (IOE :> es, LLM :> es) => [ToolSpec] -> [Tool] -> ToolCall -> Eff es ()
+executeAndRecord :: (LLM :> es) => [ToolSpec] -> [Tool (Eff es)] -> ToolCall -> Eff es ()
 executeAndRecord specs tools call = do
   let payload = case find ((== toolCallName call) . toolSpecName) specs of
         Nothing -> Left ("unknown tool: " <> toolCallName call)
@@ -121,7 +121,7 @@ executeAndRecord specs tools call = do
           Just t -> Right t
   result <- case payload of
     Left errMsg -> pure (Left errMsg)
-    Right t -> liftIO (toolRun t (toolCallArguments call))
+    Right t -> toolRun t (toolCallArguments call)
   let value = case result of
         Right v -> v
         Left errMsg -> object ["error" .= errMsg]

@@ -87,7 +87,7 @@ data CalcArgs = CalcArgs
   }
   deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
-calculator :: Tool
+calculator :: Monad m => Tool m
 calculator =
   mkTool "calculator" "Evaluate arithmetic: operation is one of add, subtract, multiply, divide" $ \(args :: CalcArgs) ->
     pure $ case operation args of

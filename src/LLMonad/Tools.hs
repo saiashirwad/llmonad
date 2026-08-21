@@ -22,10 +22,15 @@
 -- @
 module LLMonad.Tools
   ( Tool (..)
+  , ToolIO
   , tool
   , tool'
   , toolSync
   , mkTool
+  , liftTool
+  , hoistTool
+  , (.:?|)
+  , (.:|)
   , ToolResult
   , AgentOpts (..)
   , defaultAgentOpts
@@ -35,9 +40,10 @@ module LLMonad.Tools
 
 import Control.Exception (throwIO)
 import Control.Monad (when)
-import Data.Aeson (FromJSON, ToJSON (..), Value (..), eitherDecode', encode, object, (.=))
+import Data.Aeson (FromJSON, Key, Object, ToJSON (..), Value (..), eitherDecode', encode, object, (.=))
+import Data.Aeson.Types (Parser, (.:?))
 import qualified Data.ByteString.Lazy as LBS
-import Data.List (find)
+import Data.List (find, intercalate)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
@@ -55,55 +61,85 @@ import LLMonad.Types
 -- that will be passed back to the model as feedback, or a JSON payload.
 type ToolResult = Either Text Value
 
--- | A callable tool exposed to the model.
-data Tool = Tool
+--------------------------------------------------------------------------------
+-- Alternative-key argument parsing
+--------------------------------------------------------------------------------
+
+infixr 9 .:?|
+infixr 9 .:|
+
+-- | '(.:?)' over several accepted spellings of an optional field: the first
+-- key present in the object wins, and later spellings are consulted only
+-- while no value has been found yet.
+--
+-- > o .:?| ["searchDirectory", "search_directory", "directory"]
+(.:?|) :: FromJSON a => Object -> [Key] -> Parser (Maybe a)
+o .:?| keys = go keys
+  where
+    go []       = pure Nothing
+    go (k : ks) = o .:? k >>= maybe (go ks) (pure . Just)
+
+-- | '(.:)' over several accepted spellings of a required field: the first key
+-- present in the object wins; fails when none are present.
+--
+-- > o .:| ["filePath", "file_path", "path"]
+(.:|) :: FromJSON a => Object -> [Key] -> Parser a
+o .:| keys = o .:?| keys >>= maybe missing pure
+  where
+    missing = fail ("missing required argument; expected one of: " <> intercalate ", " (map show keys))
+
+-- | A callable tool exposed to the model, parameterized by its effect monad.
+data Tool m = Tool
   { toolSpec :: ToolSpec
-  , toolRun :: Value -> IO ToolResult
+  , toolRun  :: Value -> m ToolResult
   }
+
+-- | Type alias for IO-bound tools.
+type ToolIO = Tool IO
 
 -- | Define a tool whose handler returns a 'ToJSON' result.
 tool ::
-  forall a r.
-  (FromJSON a, ToSchema a, ToJSON r) =>
+  forall a r m.
+  (Monad m, FromJSON a, ToSchema a, ToJSON r) =>
   -- | Tool name (e.g. @"fetch_url"@)
   Text ->
   -- | Description given to the model
   Text ->
   -- | Implementation
-  (a -> IO r) ->
-  Tool
+  (a -> m r) ->
+  Tool m
 tool name desc run =
   tool' name desc (\a -> Right . toJSON <$> run a)
 
 -- | Define a pure synchronous tool.
 toolSync ::
-  forall a r.
-  (FromJSON a, ToSchema a, ToJSON r) =>
+  forall a r m.
+  (Monad m, FromJSON a, ToSchema a, ToJSON r) =>
   Text ->
   Text ->
   (a -> r) ->
-  Tool
+  Tool m
 toolSync name desc run = tool name desc (pure . run)
 
 -- | Alias for 'tool'.
 mkTool ::
-  forall a r.
-  (FromJSON a, ToSchema a, ToJSON r) =>
+  forall a r m.
+  (Monad m, FromJSON a, ToSchema a, ToJSON r) =>
   Text ->
   Text ->
-  (a -> IO r) ->
-  Tool
+  (a -> m r) ->
+  Tool m
 mkTool = tool
 
 -- | Define a tool whose handler returns a raw 'ToolResult' (allows returning
 -- explicit error text back to the model).
 tool' ::
-  forall a.
-  (FromJSON a, ToSchema a) =>
+  forall a m.
+  (Monad m, FromJSON a, ToSchema a) =>
   Text ->
   Text ->
-  (a -> IO ToolResult) ->
-  Tool
+  (a -> m ToolResult) ->
+  Tool m
 tool' name desc run =
   Tool
     { toolSpec =
@@ -133,12 +169,20 @@ tool' name desc run =
               Right parsed' -> run parsed'
     }
 
+-- | Lift an IO-based tool into an Effectful environment.
+liftTool :: (IOE :> es) => Tool IO -> Tool (Eff es)
+liftTool (Tool spec run) = Tool spec (\val -> liftIO (run val))
+
+-- | Hoist a natural transformation over a tool's effect monad.
+hoistTool :: (forall x. m x -> n x) -> Tool m -> Tool n
+hoistTool nat (Tool spec run) = Tool spec (nat . run)
+
 -- | Knobs for the agent loop.
 data AgentOpts = AgentOpts
   { -- | Maximum model round-trips before giving up.
     agentMaxRounds :: Int
   , -- | Sampling parameters for every round.
-    agentParams :: Params
+    agentParams    :: Params
   }
 
 defaultAgentOpts :: AgentOpts
@@ -150,11 +194,11 @@ defaultAgentOpts =
 
 -- | Give the model tools and a task; let it call them until it produces a
 -- final answer. Throws 'AgentRoundsExhausted' if it never settles.
-useTools :: (LLM :> es, IOE :> es) => [Tool] -> Text -> Eff es Text
+useTools :: (LLM :> es, IOE :> es) => [Tool (Eff es)] -> Text -> Eff es Text
 useTools = useToolsWith defaultAgentOpts
 
 -- | 'useTools' with explicit options.
-useToolsWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool] -> Text -> Eff es Text
+useToolsWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
 useToolsWith opts tools instruction = do
   pushMessage (UserMsg instruction)
   loop (agentMaxRounds opts) []
@@ -184,7 +228,7 @@ useToolsWith opts tools instruction = do
               Just t -> Right t
       result <- case payload of
         Left errMsg -> pure (Left errMsg)
-        Right t -> liftIO (toolRun t (toolCallArguments call))
+        Right t -> toolRun t (toolCallArguments call)
       let value = case result of
             Right v -> v
             Left errMsg -> object ["error" .= errMsg]

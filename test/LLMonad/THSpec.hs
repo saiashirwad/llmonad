@@ -34,13 +34,13 @@ sampleIOEcho t = pure ("Echo: " <> t)
 $(return [])
 
 -- Splice tools using makeTool and makeToolNamed
-thRecordTool :: Tool
+thRecordTool :: Tool IO
 thRecordTool = $(makeTool 'sampleRecordTool)
 
-thAddTool :: Tool
+thAddTool :: Tool IO
 thAddTool = $(makeTool 'samplePureAdd)
 
-thEchoTool :: Tool
+thEchoTool :: Tool IO
 thEchoTool = $(makeToolNamed "custom_echo" 'sampleIOEcho)
 
 spec :: Spec

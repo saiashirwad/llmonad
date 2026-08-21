@@ -18,6 +18,15 @@ import qualified LLMonad.SSESpec
 import qualified LLMonad.StreamingSpec
 import qualified LLMonad.StructuredSpec
 import qualified LLMonad.THSpec
+import qualified LLMonad.CodingToolsSpec
+import qualified LLMonad.CodingToolsAdversarialSpec
+import qualified LLMonad.JournalSpec
+import qualified LLMonad.SubagentSpec
+import qualified LLMonad.TUISpec
+import qualified LLMonad.TUIAdversarialSpec
+import qualified LLMonad.WorldSpec
+import qualified LLMonad.WorldAdversarialSpec
+import qualified LLMonad.E2ESpec
 import Test.Hspec
 
 main :: IO ()
@@ -38,4 +47,15 @@ main = hspec $ do
   describe "Tier 3: Pairwise Interactions" LLMonad.E2ETier3Spec.spec
   describe "Tier 4: Real-World Workloads" LLMonad.E2ETier4Spec.spec
   describe "Challenger Adversarial Stress Tests (M1)" LLMonad.ChallengerSpec.spec
+  describe "World Effect & Sandboxing (R1)" LLMonad.WorldSpec.spec
+  describe "World Effect Adversarial Stress Tests (R1)" LLMonad.WorldAdversarialSpec.spec
+  describe "Journal Effect & Persistence (R2)" LLMonad.JournalSpec.spec
+  describe "Standard Coding Tools (R3)" LLMonad.CodingToolsSpec.spec
+  describe "Subagent Delegation (R3)" LLMonad.SubagentSpec.spec
+  describe "Coding Tools & Subagents Adversarial Suite (M3)" LLMonad.CodingToolsAdversarialSpec.spec
+  describe "Brick + Vty Interactive TUI (R4 / Milestone 4)" LLMonad.TUISpec.spec
+  describe "Brick + Vty Interactive TUI Adversarial Suite (M4)" LLMonad.TUIAdversarialSpec.spec
+  describe "E2E Master Suite (Milestone 5 / Tiers 1-5)" LLMonad.E2ESpec.spec
+
+
 

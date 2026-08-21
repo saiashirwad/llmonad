@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -8,6 +9,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# OPTIONS_GHC -Wno-partial-fields #-}
 
 module LLMonad.ChallengerSpec (spec) where
 
@@ -19,7 +21,6 @@ import Data.Aeson
   ( FromJSON
   , ToJSON
   , Value (..)
-  , encode
   , object
   , toJSON
   , (.=)
@@ -30,7 +31,6 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (isLeft)
 import Data.IORef
-import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -82,7 +82,8 @@ data TreeItem
   deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
 
 newtype UserId = UserId Text
-  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+  deriving stock (Show, Eq, Generic)
+  deriving anyclass (FromJSON, ToJSON, ToSchema)
 
 data ComplexContainer = ComplexContainer
   { ccList :: [Int]
@@ -126,34 +127,34 @@ fnIO4 n s b d = pure ("io-four:" <> T.pack (show n) <> ":" <> s <> ":" <> T.pack
 
 $(return [])
 
-toolThPure0 :: Tool
+toolThPure0 :: Monad m => Tool m
 toolThPure0 = $(makeTool 'fnPure0)
 
-toolThPure1 :: Tool
+toolThPure1 :: Monad m => Tool m
 toolThPure1 = $(makeTool 'fnPure1)
 
-toolThPure2 :: Tool
+toolThPure2 :: Monad m => Tool m
 toolThPure2 = $(makeTool 'fnPure2)
 
-toolThPure3 :: Tool
+toolThPure3 :: Monad m => Tool m
 toolThPure3 = $(makeTool 'fnPure3)
 
-toolThPure4 :: Tool
+toolThPure4 :: Monad m => Tool m
 toolThPure4 = $(makeTool 'fnPure4)
 
-toolThIO0 :: Tool
+toolThIO0 :: Tool IO
 toolThIO0 = $(makeTool 'fnIO0)
 
-toolThIO1 :: Tool
+toolThIO1 :: Tool IO
 toolThIO1 = $(makeTool 'fnIO1)
 
-toolThIO2 :: Tool
+toolThIO2 :: Tool IO
 toolThIO2 = $(makeTool 'fnIO2)
 
-toolThIO3 :: Tool
+toolThIO3 :: Tool IO
 toolThIO3 = $(makeTool 'fnIO3)
 
-toolThIO4 :: Tool
+toolThIO4 :: Tool IO
 toolThIO4 = $(makeTool 'fnIO4)
 
 spec :: Spec

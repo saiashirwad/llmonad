@@ -33,15 +33,15 @@ data AgentSummary = AgentSummary
   }
   deriving (Show, Eq, Generic, FromJSON, ToSchema)
 
-addTool :: Tool
+addTool :: Monad m => Tool m
 addTool = mkTool "add" "Add two integers" $ \(args :: AddArgs) -> pure (x args + y args)
 
-searchTool :: IORef [Text] -> Tool
-searchTool logRef = mkTool "search" "Search knowledge base" $ \(args :: SearchArgs) -> do
-  liftIO (modifyIORef' logRef (query args :))
-  pure ("Found article for: " <> query args)
+searchTool :: (IOE :> es) => IORef [Text] -> Tool (Eff es)
+searchTool logRef = mkTool "search" "Search knowledge base" $ \(SearchArgs q) -> do
+  liftIO (modifyIORef' logRef (q :))
+  pure ("Found article for: " <> q)
 
-noArgsTool :: Tool
+noArgsTool :: Monad m => Tool m
 noArgsTool = mkTool "ping" "Ping status" $ \(_ :: NoArgs) -> pure ("pong" :: Text)
 
 runAgentScript ::
@@ -59,7 +59,7 @@ spec :: Spec
 spec = do
   describe "Autonomous Agent Loop (Tier 1: Feature Coverage)" $ do
     it "mkTool produces valid ToolSpec with name, description, and schema" $ do
-      let spec' = toolSpec addTool
+      let spec' = toolSpec (addTool @IO)
       toolSpecName spec' `shouldBe` "add"
       toolSpecDescription spec' `shouldBe` "Add two integers"
       toolSpecParameters spec' `shouldBe` toSchema @AddArgs

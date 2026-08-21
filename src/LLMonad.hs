@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -107,10 +108,13 @@ module LLMonad
 
     -- * Tools & Agent
   , Tool (..)
+  , ToolIO
   , tool
   , tool'
   , toolSync
   , mkTool
+  , liftTool
+  , hoistTool
   , useTools
   , useToolsWith
   , runAgent
@@ -120,10 +124,55 @@ module LLMonad
   , AgentOpts (..)
   , defaultAgentOpts
 
+    -- * Standard Coding Tools
+  , module LLMonad.Tools.Coding
+
+    -- * Subagent Delegation
+  , module LLMonad.Subagent
+
     -- * Template Haskell
   , prompt
   , makeTool
   , makeToolNamed
+
+    -- * Execution Sandboxing & World Effect
+  , module LLMonad.World
+  , module LLMonad.World.Local
+  , module LLMonad.World.Worktree
+  , module LLMonad.World.Memory
+
+    -- * Session Persistence & Journal Effect
+  , Journal (..)
+  , JournalEvent (TurnStarted, ModelTurn, ToolInvoked, ToolCompleted, MetricsReported, TurnFinished)
+  , pattern JournalUserMsg
+  , ModelMetrics (..)
+  , ReplaySummary (..)
+  , JournalState (..)
+  , recordEvent
+  , getEvents
+  , clearEvents
+  , recordUserMsg
+  , recordModelTurn
+  , recordToolCall
+  , recordToolResult
+  , recordMetrics
+  , recordTurnStart
+  , recordTurnFinish
+  , runJournalFile
+  , runJournalFileWithEvents
+  , runJournalFileWorld
+  , runJournalMemory
+  , runJournalMemoryWithState
+  , runJournalMemorySimple
+  , resumeSession
+  , resumeSessionWorld
+  , replayAudit
+  , replayAuditSummary
+  , loadJournalFile
+  , loadJournalText
+  , reconstructChatHistory
+    -- * Terminal User Interface (Brick + Vty)
+  , module LLMonad.TUI
   ) where
 
 import LLMonad.API
@@ -131,6 +180,9 @@ import LLMonad.Agent
 import LLMonad.Core
 import LLMonad.Interpreter.HTTP
 import LLMonad.Interpreter.Mock
+import LLMonad.Journal
+import LLMonad.Journal.File
+import LLMonad.Journal.Memory
 import LLMonad.Middleware.Cache
 import LLMonad.Middleware.RateLimit
 import LLMonad.Middleware.Trace
@@ -141,8 +193,16 @@ import LLMonad.Providers.OpenAICompatible
 import LLMonad.Schema
 import LLMonad.Streaming
 import LLMonad.Structured
+import LLMonad.Subagent
 import LLMonad.TH
 import LLMonad.Tools
+import LLMonad.Tools.Coding
+import LLMonad.TUI
 import LLMonad.Types
+import LLMonad.World
+import LLMonad.World.Local
+import LLMonad.World.Memory
+import LLMonad.World.Worktree
+
 
 
