@@ -34,6 +34,7 @@ module LLMonad.Tools
   ) where
 
 import Control.Exception (throwIO)
+import Control.Monad (when)
 import Data.Aeson (FromJSON, ToJSON (..), Value (..), eitherDecode', encode, object, (.=))
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (find)
@@ -156,19 +157,24 @@ useTools = useToolsWith defaultAgentOpts
 useToolsWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool] -> Text -> Eff es Text
 useToolsWith opts tools instruction = do
   pushMessage (UserMsg instruction)
-  loop (agentMaxRounds opts)
+  loop (agentMaxRounds opts) []
   where
     specs = map toolSpec tools
 
-    loop roundsLeft = do
-      resp <- chatRound (agentParams opts) RfText specs ToolAuto
-      case crspToolCalls resp of
-        [] -> pure (crspText resp)
-        calls
-          | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
-          | otherwise -> do
-              mapM_ executeAndRecord calls
-              loop (roundsLeft - 1)
+    loop roundsLeft prevSignatures
+      | roundsLeft <= 0 = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
+      | otherwise = do
+          resp <- chatRound (agentParams opts) RfText specs ToolAuto
+          case crspToolCalls resp of
+            [] -> pure (crspText resp)
+            calls
+              | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
+              | otherwise -> do
+                  let currentSignatures = [(toolCallName c, toolCallArguments c) | c <- calls]
+                  when (currentSignatures == prevSignatures && not (null currentSignatures)) $ do
+                    pushMessage (UserMsg "Warning: Repeated identical tool call signature detected. Please adjust your plan or return the final answer.")
+                  mapM_ executeAndRecord calls
+                  loop (roundsLeft - 1) currentSignatures
 
     executeAndRecord call = do
       let payload = case find ((== toolCallName call) . toolSpecName) specs of

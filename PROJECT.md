@@ -7,9 +7,9 @@ LLMonad is a type-safe, composable Haskell library and DSL for Large Language Mo
 1. **Effectful Core Layer**: Dynamic effect `data LLM :: Effect`, operations GADT, interpreters (`runLLMHTTP`, `runLLMMock`), and higher-order middleware (`withCache`, `withTrace`, `withRateLimit`).
 2. **Schema & Structured Layer**: Type-driven JSON Schema generation (`HasSchema`) using GHC Generics, self-correcting error recovery extraction loops (`askStructured`).
 3. **Curried Functional API Layer**: Concise, curried functions (`ask`, `ask'`) driven by the `AskFunction` typeclass family with full Monadic/Applicative composition.
-4. **Autonomous Agent Layer**: Type-safe tool definitions (`tool`, `toolSync`) and autonomous multi-step ReAct agent execution (`runAgent`) with cycle detection and step bounds.
+4. **Autonomous Agent Layer**: Type-safe tool definitions (`tool`, `toolSync`) and autonomous multi-step ReAct agent execution (`runAgent`, `runAgentStructured`) with cycle detection and step bounds.
 5. **Prompt & Streaming Layer**: `Prompt` monoid with `IsString`, message constructors, few-shot templating, and SSE token streaming.
-6. **Template Haskell Layer**: QuasiQuoter `[prompt| ... |]` with `#{var}` variable interpolation and `makeTool` splices.
+6. **Template Haskell Layer**: QuasiQuoter `[prompt| ... |]` with `#{var}` variable interpolation and `makeTool` / `makeToolNamed` splices.
 7. **Application & Documentation Layer**: Top-level `LLMonad` module, executable CLI demo `app/Main.hs`, standalone `examples/`, and comprehensive `README.md`.
 
 ---
@@ -41,7 +41,7 @@ LLMonad is a type-safe, composable Haskell library and DSL for Large Language Mo
 | F7.2 | Main Executable | `app/Main.hs` demonstration application with fallback mock mode | M7 | AC |
 | F7.3 | Standalone Examples | Executable examples in `examples/` for currying, structured output, agents, QuasiQuoters | M7 | AC |
 | F7.4 | Documentation | Comprehensive `README.md` with exact user API code snippets and zero-warning verification | M7 | AC |
-| T1.1 | E2E Test Suite | Comprehensive Hspec test suite in `test/Spec.hs` across Tiers 1-4 | E2E | AC |
+| T1.1 | E2E Test Suite | Comprehensive Hspec test suite in `test/Spec.hs` across Tiers 1-4 (189 tests) | E2E | AC |
 
 ---
 
@@ -50,12 +50,13 @@ LLMonad is a type-safe, composable Haskell library and DSL for Large Language Mo
 |---|------|-------|-------------|--------|
 | E2E | E2E Testing Track | `TEST_INFRA.md`, Opaque-box Hspec test suite (Tiers 1-4), `TEST_READY.md` | none | DONE |
 | M1 | Core Effect & Types | `llmonad.cabal`, `LLMonad.Core`, `LLMonad.Types`, `LLMonad.Provider`, `LLMonad.Providers.*`, `LLMonad.Interpreter.*`, `LLMonad.Middleware.*` | none | DONE |
-| M2 | Schema & Structured Output | `LLMonad.Schema` (`HasSchema`), `LLMonad.Structured` (`askStructured`, self-correcting retry loop) | M1 | PLANNED |
-| M3 | Curried Functional API | `LLMonad.API` (`AskFunction`, `ToPromptArg`, `ask`, `ask'`), Monadic/Applicative composition | M2 | PLANNED |
-| M4 | Autonomous Tool Agent | `LLMonad.Tools` (`tool`, `toolSync`), `LLMonad.Agent` (`runAgent`, cycle detection, step bounds) | M2 | PLANNED |
-| M5 | Prompt & Streaming | `LLMonad.Prompt` (`Prompt`, `fewShot`), `LLMonad.Streaming`, `LLMonad.Internal.*` | M1 | PLANNED |
-| M6 | Template Haskell | `LLMonad.TH.QuasiQuoter` (`[prompt| ... |]`), `LLMonad.TH` (`makeTool`) | M4, M5 | PLANNED |
-| M7 | Integration & Documentation | `LLMonad` umbrella module, `app/Main.hs`, `examples/`, `README.md`, zero-warning verification | M1, M2, M3, M4, M5, M6 | PLANNED |
+| M2 | Schema & Structured Output | `LLMonad.Schema` (`HasSchema`), `LLMonad.Structured` (`askStructured`, self-correcting retry loop) | M1 | DONE |
+| M3 | Curried Functional API | `LLMonad.API` (`AskFunction`, `ToPromptArg`, `ask`, `ask'`), Monadic/Applicative composition | M2 | DONE |
+| M4 | Autonomous Tool Agent | `LLMonad.Tools` (`tool`, `toolSync`), `LLMonad.Agent` (`runAgent`, cycle detection, step bounds) | M2 | DONE |
+| M5 | Prompt & Streaming | `LLMonad.Prompt` (`Prompt`, `fewShot`), `LLMonad.Streaming`, `LLMonad.Internal.*` | M1 | DONE |
+| M6 | Template Haskell | `LLMonad.TH.QuasiQuoter` (`[prompt| ... |]`), `LLMonad.TH` (`makeTool`) | M4, M5 | DONE |
+| M7 | Integration & Documentation | `LLMonad` umbrella module, `app/Main.hs`, `examples/`, `README.md`, zero-warning verification | M1, M2, M3, M4, M5, M6 | DONE |
+| P2 | Final Verification & Hardening | 189 passing tests, 5 passing examples, zero compiler warnings under `-Wall -Werror`, clean forensic audit | all | DONE |
 
 ---
 
@@ -97,11 +98,11 @@ LLMonad is a type-safe, composable Haskell library and DSL for Large Language Mo
 ├── app/
 │   └── Main.hs
 ├── examples/
-│   ├── CurriedAPI.hs
-│   ├── StructuredOutput.hs
-│   ├── ToolsAgent.hs
-│   ├── QuasiQuotes.hs
-│   └── EffectfulHandlers.hs
+│   ├── 01_CurriedAPI.hs
+│   ├── 02_StructuredOutput.hs
+│   ├── 03_AgentWithTools.hs
+│   ├── 04_QuasiQuotes.hs
+│   └── 05_EffectfulHandlers.hs
 ├── test/
 │   ├── Spec.hs
 │   └── LLMonad/
@@ -122,71 +123,4 @@ LLMonad is a type-safe, composable Haskell library and DSL for Large Language Mo
 │       ├── E2ETier3Spec.hs
 │       └── E2ETier4Spec.hs
 └── README.md
-```
-
----
-
-## Interface Contracts
-
-### 1. `LLMonad.Core` & `LLMonad.Types`
-```haskell
-data LLM :: Effect where
-  ChatRound    :: Params -> ResponseFormat -> [ToolSpec] -> ToolChoice -> LLM m CompletionResponse
-  StreamRound  :: Params -> ResponseFormat -> [ToolSpec] -> (StreamEvent -> IO ()) -> LLM m CompletionResponse
-  GetHistory   :: LLM m [ChatMessage]
-  SetHistory   :: [ChatMessage] -> LLM m ()
-  PushMessage  :: ChatMessage -> LLM m ()
-  ClearHistory :: LLM m ()
-  GetSystem    :: LLM m (Maybe Text)
-  SetSystem    :: Text -> LLM m ()
-  ClearSystem  :: LLM m ()
-
-type instance DispatchOf LLM = Dynamic
-
-runLLMHTTP :: (IOE :> es) => LLMConfig -> Eff (LLM : es) a -> Eff es a
-runLLMMock :: [Either LLMError CompletionResponse] -> Eff (LLM : es) a -> Eff es (a, [CompletionRequest])
-```
-
-### 2. `LLMonad.Schema` & `LLMonad.Structured`
-```haskell
-class HasSchema a where
-  schema :: Value
-  schemaName :: Text
-  schemaDescription :: Text
-
-askStructured :: forall a es. (LLM :> es, FromJSON a, HasSchema a) => Text -> Eff es a
-extractWithRetry :: forall a es. (LLM :> es, FromJSON a, HasSchema a) => Int -> Text -> Eff es a
-```
-
-### 3. `LLMonad.API`
-```haskell
-class AskFunction es fn a | fn -> es a where
-  askApply :: Text -> [Text] -> fn
-
-ask :: (AskFunction es fn a) => Text -> fn
-ask' :: (AskFunction es fn a) => Text -> fn
-```
-
-### 4. `LLMonad.Tools` & `LLMonad.Agent`
-```haskell
-tool :: forall args ret. (FromJSON args, HasSchema args, ToJSON ret) => Text -> Text -> (args -> IO ret) -> Tool
-toolSync :: forall args ret. (FromJSON args, HasSchema args, ToJSON ret) => Text -> Text -> (args -> ret) -> Tool
-runAgent :: (LLM :> es, IOE :> es) => [Tool] -> Text -> Eff es Text
-runAgentStructured :: forall a es. (LLM :> es, IOE :> es, FromJSON a, HasSchema a) => [Tool] -> Text -> Eff es a
-```
-
-### 5. `LLMonad.Prompt` & `LLMonad.Streaming`
-```haskell
-newtype Prompt = Prompt { unPrompt :: Text }
-  deriving newtype (Eq, Show, Semigroup, Monoid, IsString)
-
-fewShot :: [(Text, Text)] -> Text -> [ChatMessage]
-streamSSE :: (LLM :> es) => Params -> [ToolSpec] -> (Text -> IO ()) -> Eff es Text
-```
-
-### 6. `LLMonad.TH` & `LLMonad.TH.QuasiQuoter`
-```haskell
-prompt :: QuasiQuoter
-makeTool :: Name -> Q Exp
-makeToolNamed :: Text -> Name -> Q Exp
 ```

@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module LLMonad.AgentSpec (spec) where
 
@@ -25,6 +26,11 @@ data SearchArgs = SearchArgs
   deriving (Show, Eq, Generic, FromJSON, ToSchema)
 
 data NoArgs = NoArgs {}
+  deriving (Show, Eq, Generic, FromJSON, ToSchema)
+
+data AgentSummary = AgentSummary
+  { totalSum :: Int
+  }
   deriving (Show, Eq, Generic, FromJSON, ToSchema)
 
 addTool :: Tool
@@ -161,3 +167,32 @@ spec = do
       length reqs `shouldBe` 2
       map (paramTemperature . crParams) reqs `shouldSatisfy` all (== Just 0.1)
       map (paramMaxTokens . crParams) reqs `shouldSatisfy` all (== Just 500)
+
+    it "runAgent executes tools and returns final answer" $ do
+      let script =
+            [ Right (toolResp [ToolCall "c1" "add" (object ["x" .= (15 :: Int), "y" .= (25 :: Int)])])
+            , Right (textResp "Computed sum is 40")
+            ]
+      (answer, conv, _) <- runAgentScript script (runAgent [addTool] "Add 15 and 25")
+      answer `shouldBe` "Computed sum is 40"
+      toolContentsOf conv `shouldBe` ["40"]
+
+    it "runAgentStructured executes tools and decodes structured record" $ do
+      let script =
+            [ Right (toolResp [ToolCall "c1" "add" (object ["x" .= (100 :: Int), "y" .= (200 :: Int)])])
+            , Right (structuredResp (object ["totalSum" .= (300 :: Int)]))
+            ]
+      (summary, _, _) <- runAgentScript script (runAgentStructured @AgentSummary [addTool] "Compute sum")
+      summary `shouldBe` AgentSummary 300
+
+    it "detects repeated tool call cycles and pushes warning message" $ do
+      let repeatCall = Right (toolResp [ToolCall "c1" "add" (object ["x" .= (1 :: Int), "y" .= (1 :: Int)])])
+          script =
+            [ repeatCall
+            , repeatCall
+            , Right (textResp "Recovered after cycle warning")
+            ]
+      (answer, conv, _) <- runAgentScript script (runAgent [addTool] "Run repeated call")
+      answer `shouldBe` "Recovered after cycle warning"
+      let userMsgs = [m | UserMsg m <- conv]
+      userMsgs `shouldSatisfy` any (T.isInfixOf "Repeated identical tool call signature detected")

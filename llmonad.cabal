@@ -122,6 +122,11 @@ test-suite llmonad-test
         LLMonad.AnthropicSpec
         LLMonad.MockSpec
         LLMonad.AgentSpec
+        LLMonad.CurriedAPISpec
+        LLMonad.StructuredSpec
+        LLMonad.PromptSpec
+        LLMonad.StreamingSpec
+        LLMonad.THSpec
         LLMonad.E2ETier3Spec
         LLMonad.E2ETier4Spec
         LLMonad.ChallengerSpec

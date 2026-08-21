@@ -1,14 +1,22 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | Composable prompt and message algebra.
 module LLMonad.Prompt
   ( Prompt (..)
   , fewShot
+  , user
+  , assistant
+  , system
+  , toolResult
+  , ToPromptArg (..)
   ) where
 
 import Data.String (IsString)
 import Data.Text (Text)
+import qualified Data.Text as T
 import LLMonad.Types (ChatMessage (..))
 
 -- | A composable prompt monoid.
@@ -19,3 +27,48 @@ newtype Prompt = Prompt { unPrompt :: Text }
 fewShot :: [(Text, Text)] -> Text -> [ChatMessage]
 fewShot examples query =
   concatMap (\(u, a) -> [UserMsg u, AssistantMsg a []]) examples ++ [UserMsg query]
+
+-- | User message smart constructor.
+user :: Text -> ChatMessage
+user = UserMsg
+
+-- | Assistant message smart constructor.
+assistant :: Text -> ChatMessage
+assistant t = AssistantMsg t []
+
+-- | System message smart constructor.
+system :: Text -> ChatMessage
+system = SystemMsg
+
+-- | Tool result message smart constructor.
+toolResult :: Text -> Text -> ChatMessage
+toolResult = ToolMsg
+
+-- | Class for types that can be interpolated into prompts.
+class ToPromptArg a where
+  toPromptArg :: a -> Text
+
+instance ToPromptArg Text where
+  toPromptArg = id
+
+instance ToPromptArg String where
+  toPromptArg = T.pack
+
+instance ToPromptArg Int where
+  toPromptArg = T.pack . show
+
+instance ToPromptArg Integer where
+  toPromptArg = T.pack . show
+
+instance ToPromptArg Double where
+  toPromptArg = T.pack . show
+
+instance ToPromptArg Float where
+  toPromptArg = T.pack . show
+
+instance ToPromptArg Bool where
+  toPromptArg = T.pack . show
+
+instance {-# OVERLAPPABLE #-} (Show a) => ToPromptArg a where
+  toPromptArg = T.pack . show
+

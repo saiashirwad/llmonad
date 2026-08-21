@@ -19,7 +19,7 @@
 module Main where
 
 import Control.Exception (try)
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON, ToJSON, toJSON)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -28,7 +28,6 @@ import Effectful
 import GHC.Generics (Generic)
 import LLMonad
 import System.Environment (lookupEnv)
-import System.Exit (exitFailure)
 import System.IO (hFlush, stdout)
 
 --------------------------------------------------------------------------------
@@ -75,12 +74,18 @@ data ReviewVerdict = ReviewVerdict
   }
   deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
+data TopicComparison = TopicComparison
+  { sameTopic :: Bool
+  , reason :: Text
+  }
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
+
 data CalcArgs = CalcArgs
   { operation :: Text
   , a :: Double
   , b :: Double
   }
-  deriving (Show, Generic, FromJSON, ToSchema)
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
 calculator :: Tool
 calculator =
@@ -98,7 +103,7 @@ calculator =
 demoStreaming :: (LLM :> es, IOE :> es) => Eff es ()
 demoStreaming = do
   setSystem "You write in one short paragraph, no preamble."
-  _ <- streamText (\t -> TIO.putStr t >> hFlush stdout) "Explain monads to a tired Ruby developer."
+  _ <- streamText (\t -> TIO.putStr t >> hFlush stdout) "Explain monads to a tired developer."
   liftIO (putStrLn "\n")
 
 demoTypedAsk :: (LLM :> es, IOE :> es) => Eff es ()
@@ -109,6 +114,13 @@ demoTypedAsk = do
   verdict <- ask @ReviewVerdict ("Extract structured data from this movie review:\n" <> review)
   liftIO (print verdict)
 
+demoCurriedAsk :: forall es. (LLM :> es, IOE :> es) => Eff es ()
+demoCurriedAsk = do
+  let compareTopics :: Text -> Text -> Eff es TopicComparison
+      compareTopics = ask' @TopicComparison @es "Do these two sentences discuss the same topic?"
+  comparison <- compareTopics "Haskell is purely functional." "Effect systems manage side effects."
+  liftIO (print comparison)
+
 demoMemory :: (LLM :> es, IOE :> es) => Eff es ()
 demoMemory = do
   setSystem "You are terse."
@@ -118,7 +130,7 @@ demoMemory = do
 
 demoTools :: (LLM :> es, IOE :> es) => Eff es ()
 demoTools = do
-  answer <- useTools [calculator] "Use the calculator tool to compute 17 * 23 - 4, then tell me the result."
+  answer <- runAgent [calculator] "Use the calculator tool to compute 17 * 23 - 4, then tell me the result."
   liftIO (TIO.putStrLn answer)
 
 --------------------------------------------------------------------------------
@@ -127,19 +139,35 @@ demoTools = do
 
 main :: IO ()
 main = pickConfig >>= \case
-  Nothing -> do
-    putStrLn "No provider configured. Set one of:"
-    putStrLn "  ANTHROPIC_API_KEY / OPENAI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY"
-    putStrLn "  or OLLAMA_HOST=http://localhost:11434 for a local model."
-    putStrLn "Optionally set LLMONAD_MODEL to override the default model."
-    exitFailure
   Just cfg -> do
-    putStrLn ("=== llmonad demo — provider: " <> T.unpack (providerName (configProvider cfg)) <> ", model: " <> show (configModel cfg) <> " ===\n")
-
-    runDemo "1. streaming" (runEff (runLLMHTTP cfg demoStreaming))
-    runDemo "2. typed ask" (runEff (runLLMHTTP cfg demoTypedAsk))
-    runDemo "3. conversation memory" (runEff (runLLMHTTP cfg demoMemory))
-    runDemo "4. tools" (runEff (runLLMHTTP cfg demoTools))
+    putStrLn ("=== LLMonad Live Demo — provider: " <> T.unpack (providerName (configProvider cfg)) <> ", model: " <> show (configModel cfg) <> " ===\n")
+    runDemo "1. Streaming" (runEff (runLLMHTTP cfg demoStreaming))
+    runDemo "2. Typed Curried ask" (runEff (runLLMHTTP cfg demoTypedAsk))
+    runDemo "3. Multi-Argument ask'" (runEff (runLLMHTTP cfg demoCurriedAsk))
+    runDemo "4. Conversational Memory" (runEff (runLLMHTTP cfg demoMemory))
+    runDemo "5. Autonomous Tool Agent" (runEff (runLLMHTTP cfg demoTools))
+  Nothing -> do
+    putStrLn "=== LLMonad Demo (Offline Mock Mode) ==="
+    putStrLn "Tip: Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for live execution.\n"
+    let mockReview = ReviewVerdict "Chainsaw Massacre 9" Positive 8.5 ["tender", "patient", "sheriff"]
+        mockComparison = TopicComparison False "Haskell is a language whereas effect systems are a technique."
+        mockScript =
+          [ Right (textResp "A monad is a design pattern in functional programming that structures computations sequentially.")
+          , Right (structuredResp (toJSON mockReview))
+          , Right (structuredResp (toJSON mockComparison))
+          , Right (textResp "Understood.")
+          , Right (textResp "The code word was 'quokka'.")
+          , Right (toolResp [ToolCall "call-1" "calculator" (toJSON (CalcArgs "multiply" 17 23))])
+          , Right (toolResp [ToolCall "call-2" "calculator" (toJSON (CalcArgs "subtract" 391 4))])
+          , Right (textResp "17 * 23 - 4 = 387.")
+          ]
+    (res, _) <- runEff (runLLMMock mockScript (do
+      demoStreaming
+      demoTypedAsk
+      demoCurriedAsk
+      demoMemory
+      demoTools))
+    pure res
 
 runDemo :: Text -> IO () -> IO ()
 runDemo label act = do

@@ -6,20 +6,30 @@ import qualified LLMonad.AgentSpec
 import qualified LLMonad.AnthropicSpec
 import qualified LLMonad.ChallengerSpec
 import qualified LLMonad.CoreSpec
+import qualified LLMonad.CurriedAPISpec
 import qualified LLMonad.E2ETier3Spec
 import qualified LLMonad.E2ETier4Spec
 import qualified LLMonad.ExtractSpec
 import qualified LLMonad.MockSpec
 import qualified LLMonad.OpenAICompatSpec
+import qualified LLMonad.PromptSpec
 import qualified LLMonad.SchemaSpec
 import qualified LLMonad.SSESpec
+import qualified LLMonad.StreamingSpec
+import qualified LLMonad.StructuredSpec
+import qualified LLMonad.THSpec
 import Test.Hspec
 
 main :: IO ()
 main = hspec $ do
   describe "Mock Interpreter (F1.4)" LLMonad.MockSpec.spec
   describe "Core & History (F1.1, F1.5)" LLMonad.CoreSpec.spec
+  describe "Curried Functional API (F3.1, F3.2, F3.3)" LLMonad.CurriedAPISpec.spec
   describe "Schema Engine (F2.1, F2.2)" LLMonad.SchemaSpec.spec
+  describe "Structured Output & Retry (F2.3)" LLMonad.StructuredSpec.spec
+  describe "Prompt & Message Algebra (F5.1, F5.2)" LLMonad.PromptSpec.spec
+  describe "Streaming & SSE (F5.3)" LLMonad.StreamingSpec.spec
+  describe "Template Haskell & QuasiQuoter (F6.1, F6.2)" LLMonad.THSpec.spec
   describe "Extract (F2.3)" LLMonad.ExtractSpec.spec
   describe "Agent & Tools (F4.1, F4.2, F4.3)" LLMonad.AgentSpec.spec
   describe "OpenAICompatible Provider (F1.2)" LLMonad.OpenAICompatSpec.spec
@@ -28,3 +38,4 @@ main = hspec $ do
   describe "Tier 3: Pairwise Interactions" LLMonad.E2ETier3Spec.spec
   describe "Tier 4: Real-World Workloads" LLMonad.E2ETier4Spec.spec
   describe "Challenger Adversarial Stress Tests (M1)" LLMonad.ChallengerSpec.spec
+

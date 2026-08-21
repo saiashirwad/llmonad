@@ -1,17 +1,27 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 module LLMonad.ChallengerSpec (spec) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
+import Control.Exception (evaluate, try)
 import Control.Monad (forM_, replicateM, replicateM_)
 import Data.Aeson
-  ( Value (..)
+  ( FromJSON
+  , ToJSON
+  , Value (..)
+  , encode
   , object
+  , toJSON
   , (.=)
   )
 import qualified Data.Aeson.Key as Key
@@ -20,16 +30,131 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (isLeft)
 import Data.IORef
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.Map as Map
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import qualified Data.Vector as V
 import Effectful
+import GHC.Generics (Generic)
 import LLMonad
 import LLMonad.Internal.Extract (extractJSON)
 import LLMonad.Internal.SSE (finishSSE, newSSEParser, stepSSE)
+import LLMonad.Schema (describeProperties, withDescription)
+import LLMonad.TH.QuasiQuoter (PromptChunk (..), parsePromptChunks)
 import Test.Hspec
+
+-- Types for Agent stress tests
+data AddParams = AddParams
+  { addX :: Int
+  , addY :: Int
+  }
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+data StructuredResult = StructuredResult
+  { resSum :: Int
+  , resTag :: Text
+  }
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+-- Types for Schema derivation stress tests
+data TrafficLight = RedLight | YellowLight | GreenLight
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+data ServerConfig = ServerConfig
+  { cfgHost :: Text
+  , cfgPort :: Int
+  , cfgTls :: Maybe Bool
+  }
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+data Geometry
+  = GeoCircle { geoRadius :: Double }
+  | GeoRect { geoWidth :: Double, geoHeight :: Double }
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+data TreeItem
+  = LeafItem Text
+  | NodeItem Int Int
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+newtype UserId = UserId Text
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+data ComplexContainer = ComplexContainer
+  { ccList :: [Int]
+  , ccMaybe :: Maybe Text
+  , ccSet :: Set.Set Text
+  , ccMap :: Map.Map Text Int
+  , ccTuple :: (Int, Text, Bool)
+  }
+  deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
+
+-- Functions for Template Haskell makeTool
+fnPure0 :: Text
+fnPure0 = "pure-zero"
+
+fnPure1 :: Int -> Text
+fnPure1 n = "pure-one:" <> T.pack (show n)
+
+fnPure2 :: Int -> Text -> Text
+fnPure2 n s = "pure-two:" <> T.pack (show n) <> ":" <> s
+
+fnPure3 :: Int -> Text -> Bool -> Text
+fnPure3 n s b = "pure-three:" <> T.pack (show n) <> ":" <> s <> ":" <> T.pack (show b)
+
+fnPure4 :: Int -> Text -> Bool -> Double -> Text
+fnPure4 n s b d = "pure-four:" <> T.pack (show n) <> ":" <> s <> ":" <> T.pack (show b) <> ":" <> T.pack (show d)
+
+fnIO0 :: IO Text
+fnIO0 = pure "io-zero"
+
+fnIO1 :: Int -> IO Text
+fnIO1 n = pure ("io-one:" <> T.pack (show n))
+
+fnIO2 :: Int -> Text -> IO Text
+fnIO2 n s = pure ("io-two:" <> T.pack (show n) <> ":" <> s)
+
+fnIO3 :: Int -> Text -> Bool -> IO Text
+fnIO3 n s b = pure ("io-three:" <> T.pack (show n) <> ":" <> s <> ":" <> T.pack (show b))
+
+fnIO4 :: Int -> Text -> Bool -> Double -> IO Text
+fnIO4 n s b d = pure ("io-four:" <> T.pack (show n) <> ":" <> s <> ":" <> T.pack (show b) <> ":" <> T.pack (show d))
+
+$(return [])
+
+toolThPure0 :: Tool
+toolThPure0 = $(makeTool 'fnPure0)
+
+toolThPure1 :: Tool
+toolThPure1 = $(makeTool 'fnPure1)
+
+toolThPure2 :: Tool
+toolThPure2 = $(makeTool 'fnPure2)
+
+toolThPure3 :: Tool
+toolThPure3 = $(makeTool 'fnPure3)
+
+toolThPure4 :: Tool
+toolThPure4 = $(makeTool 'fnPure4)
+
+toolThIO0 :: Tool
+toolThIO0 = $(makeTool 'fnIO0)
+
+toolThIO1 :: Tool
+toolThIO1 = $(makeTool 'fnIO1)
+
+toolThIO2 :: Tool
+toolThIO2 = $(makeTool 'fnIO2)
+
+toolThIO3 :: Tool
+toolThIO3 = $(makeTool 'fnIO3)
+
+toolThIO4 :: Tool
+toolThIO4 = $(makeTool 'fnIO4)
 
 spec :: Spec
 spec = do
@@ -188,7 +313,6 @@ spec = do
             r2 <- chatRound defaultParams RfText [tool2] ToolAuto
             pure (r1, r2)
       ((r1, r2), reqs) <- runEff (runLLMMock script act)
-      -- Request 2 does not hit cache of Request 1 because keyOf includes crTools
       r1 `shouldNotBe` r2
       length reqs `shouldBe` 2
 
@@ -202,7 +326,6 @@ spec = do
         Left (ApiError 401 _) -> pure ()
         other -> expectationFailure ("Expected 401, got: " <> show other)
       traces <- readIORef tracesRef
-      -- Both TraceRequest and TraceError were emitted before failure
       length traces `shouldBe` 2
       case reverse traces of
         [TraceRequest {}, TraceError (ApiError 401 "Unauthorized")] -> pure ()
@@ -210,16 +333,13 @@ spec = do
 
   describe "Challenger Adversarial Suite: RateLimiter Token Bucket Semantics" $ do
     it "Enforces waiting delay when token capacity is exhausted" $ do
-      -- 10 tokens/sec, capacity 2
       limiter <- newRateLimiter 10.0 2.0
       t0 <- getPOSIXTime
-      -- Consume 2 tokens instantly
       rlAcquire limiter 1
       rlAcquire limiter 1
       t1 <- getPOSIXTime
       (t1 - t0) `shouldSatisfy` (< 0.1)
 
-      -- 3rd token must wait ~0.1s
       rlAcquire limiter 1
       t2 <- getPOSIXTime
       (t2 - t1) `shouldSatisfy` (>= 0.08)
@@ -379,3 +499,215 @@ spec = do
         putMVar mvar (res == "isolated response" && length reqs == 1 && length hist == 2)
       results <- replicateM numThreads (takeMVar mvar)
       results `shouldBe` replicate numThreads True
+
+  describe "Challenger Adversarial Suite: Agent Loop, Cycle Detection & Recovery" $ do
+    let addTool = toolSync "add" "Add two numbers" (\(p :: AddParams) -> addX p + addY p)
+        failTool = tool' "fail_tool" "Tool that fails" (\(_ :: AddParams) -> pure (Left "Simulated tool failure"))
+
+    it "Detects multi-round cycle repetitions and pushes warnings on each repeated cycle" $ do
+      let repeatCall = Right (toolResp [ToolCall "c1" "add" (object ["addX" .= (1 :: Int), "addY" .= (2 :: Int)])])
+          script =
+            [ repeatCall
+            , repeatCall
+            , repeatCall
+            , Right (textResp "Settled after multiple warnings")
+            ]
+      (answer, _, hist, _) <- runEff $ runLLMMockFull script (runAgent [addTool] "Run with repeated calls")
+      answer `shouldBe` "Settled after multiple warnings"
+      let warnings = [m | UserMsg m <- hist, "Repeated identical tool call signature detected" `T.isInfixOf` m]
+      length warnings `shouldBe` 2
+
+    it "Does not trigger cycle warnings on alternating or varying tool arguments" $ do
+      let call1 = Right (toolResp [ToolCall "c1" "add" (object ["addX" .= (1 :: Int), "addY" .= (1 :: Int)])])
+          call2 = Right (toolResp [ToolCall "c2" "add" (object ["addX" .= (2 :: Int), "addY" .= (2 :: Int)])])
+          script =
+            [ call1
+            , call2
+            , call1
+            , Right (textResp "Completed non-cyclical calls")
+            ]
+      (answer, _, hist, _) <- runEff $ runLLMMockFull script (runAgent [addTool] "Run alternating calls")
+      answer `shouldBe` "Completed non-cyclical calls"
+      let warnings = [m | UserMsg m <- hist, "Repeated identical tool call signature detected" `T.isInfixOf` m]
+      length warnings `shouldBe` 0
+
+    it "runAgentStructured self-corrects when model returns malformed JSON before settling" $ do
+      let call1 = Right (toolResp [ToolCall "c1" "add" (object ["addX" .= (10 :: Int), "addY" .= (20 :: Int)])])
+          badJsonResp = Right (textResp "This is not valid JSON at all")
+          validJsonResp = Right (structuredResp (object ["resSum" .= (30 :: Int), "resTag" .= ("summed" :: Text)]))
+          script = [call1, badJsonResp, validJsonResp]
+      (res, _, hist, _) <- runEff $ runLLMMockFull script (runAgentStructured @StructuredResult [addTool] "Add and return structured")
+      res `shouldBe` StructuredResult 30 "summed"
+      let feedback = [m | UserMsg m <- hist, "Your final response could not be decoded" `T.isInfixOf` m]
+      length feedback `shouldBe` 1
+
+    it "runAgentStructured throws DecodeError when rounds run out on persistent invalid JSON" $ do
+      let badJsonResp = Right (textResp "Still broken JSON")
+          opts = defaultAgentOpts { agentMaxRounds = 2 }
+          script = [badJsonResp, badJsonResp]
+      res <- try (runEff $ runLLMMockFull script (runAgentStructuredWith @StructuredResult opts [addTool] "Task"))
+      case res of
+        Left (DecodeError _ _) -> pure ()
+        Left other -> expectationFailure ("Expected DecodeError, got: " <> show other)
+        Right _ -> expectationFailure "Expected DecodeError exception"
+
+    it "Captures tool' custom error strings and feeds them back as ToolMsg error objects" $ do
+      let callFail = Right (toolResp [ToolCall "c1" "fail_tool" (object ["addX" .= (1 :: Int), "addY" .= (2 :: Int)])])
+          script = [callFail, Right (textResp "Recovered after tool error")]
+      (answer, _, hist, _) <- runEff $ runLLMMockFull script (runAgent [failTool] "Call failing tool")
+      answer `shouldBe` "Recovered after tool error"
+      let toolMsgs = [c | ToolMsg _ c <- hist]
+      toolMsgs `shouldSatisfy` any (T.isInfixOf "Simulated tool failure")
+
+  describe "Challenger Adversarial Suite: Template Haskell Splices (makeTool & QuasiQuoter)" $ do
+    it "Executes makeTool pure splices across 0, 1, 2, 3, 4 arguments" $ do
+      res0 <- toolRun toolThPure0 (toJSON ())
+      res0 `shouldBe` Right (toJSON ("pure-zero" :: Text))
+
+      res1 <- toolRun toolThPure1 (toJSON (42 :: Int))
+      res1 `shouldBe` Right (toJSON ("pure-one:42" :: Text))
+
+      res2 <- toolRun toolThPure2 (toJSON (7 :: Int, "hello" :: Text))
+      res2 `shouldBe` Right (toJSON ("pure-two:7:hello" :: Text))
+
+      res3 <- toolRun toolThPure3 (toJSON (99 :: Int, "world" :: Text, True))
+      res3 `shouldBe` Right (toJSON ("pure-three:99:world:True" :: Text))
+
+      res4 <- toolRun toolThPure4 (toJSON (100 :: Int, "test" :: Text, False, 3.14 :: Double))
+      res4 `shouldBe` Right (toJSON ("pure-four:100:test:False:3.14" :: Text))
+
+    it "Executes makeTool IO splices across 0, 1, 2, 3, 4 arguments" $ do
+      res0 <- toolRun toolThIO0 (toJSON ())
+      res0 `shouldBe` Right (toJSON ("io-zero" :: Text))
+
+      res1 <- toolRun toolThIO1 (toJSON (55 :: Int))
+      res1 `shouldBe` Right (toJSON ("io-one:55" :: Text))
+
+      res2 <- toolRun toolThIO2 (toJSON (12 :: Int, "alpha" :: Text))
+      res2 `shouldBe` Right (toJSON ("io-two:12:alpha" :: Text))
+
+      res3 <- toolRun toolThIO3 (toJSON (34 :: Int, "beta" :: Text, True))
+      res3 `shouldBe` Right (toJSON ("io-three:34:beta:True" :: Text))
+
+      res4 <- toolRun toolThIO4 (toJSON (56 :: Int, "gamma" :: Text, False, 2.718 :: Double))
+      res4 `shouldBe` Right (toJSON ("io-four:56:gamma:False:2.718" :: Text))
+
+    it "Interpolates variables with arbitrary whitespace, multiple references, and escaped tags in [prompt| ... |]" $ do
+      let myVar = "test_val" :: Text
+          count = 10 :: Int
+          res :: Text
+          res = [prompt|Value is #{   myVar   } and repeated #{myVar}. Cost: \#{99} for #{count} items.|]
+      res `shouldBe` "Value is test_val and repeated test_val. Cost: #{99} for 10 items."
+
+    it "Correctly parses prompt chunks and flags syntax errors" $ do
+      parsePromptChunks "Hello #{  name  }!" `shouldBe` Right [ChunkLit "Hello ", ChunkVar "name", ChunkLit "!"]
+      parsePromptChunks "Escape \\#{not_a_var}" `shouldBe` Right [ChunkLit "Escape #{not_a_var}"]
+      parsePromptChunks "Empty #{   }" `shouldBe` Left "Empty variable interpolation in #{}"
+      parsePromptChunks "Unclosed #{foo" `shouldBe` Left "Unclosed #{ in prompt template"
+
+  describe "Challenger Adversarial Suite: Curried ask / ask' & Composition" $ do
+    it "Executes 4-argument curried ask' and formats prompt correctly" $ do
+      let fourArgs :: Text -> Text -> Text -> Text -> Eff '[LLM] Bool
+          fourArgs = ask' "Check four conditions"
+          script = [Right (structuredResp (toJSON True))]
+      (val, reqs) <- pure $ runPureEff (runLLMMock script (fourArgs "c1" "c2" "c3" "c4"))
+      val `shouldBe` True
+      case reqs of
+        (req : _) -> crMessages req `shouldBe` [UserMsg "Check four conditions:\nc1 c2 c3 c4"]
+        [] -> expectationFailure "Expected request"
+
+    it "Supports Applicative 3-way parallel evaluation with ask" $ do
+      let script =
+            [ Right (structuredResp (toJSON ("First" :: Text)))
+            , Right (structuredResp (toJSON (100 :: Int)))
+            , Right (structuredResp (toJSON False))
+            ]
+          askText :: Text -> Eff '[LLM] Text
+          askText = ask "Get text"
+          askInt :: Text -> Eff '[LLM] Int
+          askInt = ask "Get int"
+          askBool :: Text -> Eff '[LLM] Bool
+          askBool = ask "Get bool"
+          action :: Eff '[LLM] (Text, Int, Bool)
+          action = (,,) <$> askText "in1" <*> askInt "in2" <*> askBool "in3"
+      ((t, i, b), reqs) <- pure $ runPureEff (runLLMMock script action)
+      t `shouldBe` "First"
+      i `shouldBe` 100
+      b `shouldBe` False
+      length reqs `shouldBe` 3
+
+    it "Throws DecodeError when ask receives malformed structured output" $ do
+      let script = [Right (textResp "Not valid JSON for ServerConfig")]
+          askConfig :: Text -> Eff '[LLM] ServerConfig
+          askConfig = ask "Extract server config"
+      res <- try (evaluate (runPureEff (runLLMMock script (askConfig "host: localhost"))))
+      case res of
+        Left (DecodeError _ _) -> pure ()
+        Left other -> expectationFailure ("Expected DecodeError, got: " <> show other)
+        Right _ -> expectationFailure "Expected DecodeError exception"
+
+  describe "Challenger Adversarial Suite: Schema Derivation & Compliance" $ do
+    it "Derives strict enum schema for nullary sum types" $ do
+      let s = toSchema @TrafficLight
+      s `shouldBe` object ["enum" .= ["RedLight", "YellowLight", "GreenLight" :: Text]]
+
+    it "Derives strict object schema for records with nullable properties" $ do
+      let s = toSchema @ServerConfig
+      case s of
+        Object o -> do
+          KM.lookup "type" o `shouldBe` Just (String "object")
+          KM.lookup "additionalProperties" o `shouldBe` Just (Bool False)
+          KM.lookup "required" o `shouldBe` Just (toJSON ["cfgHost", "cfgPort", "cfgTls" :: Text])
+          case KM.lookup "properties" o of
+            Just (Object props) -> do
+              KM.lookup "cfgHost" props `shouldBe` Just (object ["type" .= ("string" :: Text)])
+              KM.lookup "cfgPort" props `shouldBe` Just (object ["type" .= ("integer" :: Text)])
+              KM.lookup "cfgTls" props `shouldBe` Just (object ["type" .= toJSON ["boolean", "null" :: Text]])
+            other -> expectationFailure ("Expected properties object, got: " <> show other)
+        other -> expectationFailure ("Expected object schema, got: " <> show other)
+
+    it "Derives anyOf schema for sum types with record constructors" $ do
+      let s = toSchema @Geometry
+      case s of
+        Object o -> case KM.lookup "anyOf" o of
+          Just (Array variants) -> length variants `shouldBe` 2
+          other -> expectationFailure ("Expected anyOf array, got: " <> show other)
+        other -> expectationFailure ("Expected object with anyOf, got: " <> show other)
+
+    it "Derives anyOf schema for sum types with positional constructors" $ do
+      let s = toSchema @TreeItem
+      case s of
+        Object o -> case KM.lookup "anyOf" o of
+          Just (Array variants) -> length variants `shouldBe` 2
+          other -> expectationFailure ("Expected anyOf array, got: " <> show other)
+        other -> expectationFailure ("Expected object with anyOf, got: " <> show other)
+
+    it "Unwraps single-constructor single-field newtype schemas" $ do
+      let s = toSchema @UserId
+      s `shouldBe` object ["type" .= ("string" :: Text)]
+
+    it "Derives schemas for complex container types (Set, Map, Tuple, NonEmpty)" $ do
+      let s = toSchema @ComplexContainer
+      case s of
+        Object o -> case KM.lookup "properties" o of
+          Just (Object props) -> do
+            KM.lookup "ccList" props `shouldBe` Just (object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("integer" :: Text)]])
+            KM.lookup "ccSet" props `shouldBe` Just (object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("string" :: Text)], "uniqueItems" .= True])
+            KM.lookup "ccMap" props `shouldBe` Just (object ["type" .= ("object" :: Text), "additionalProperties" .= object ["type" .= ("integer" :: Text)]])
+          other -> expectationFailure ("Expected properties, got: " <> show other)
+        other -> expectationFailure ("Expected object, got: " <> show other)
+
+    it "Enriches schema with withDescription and describeProperties" $ do
+      let base = toSchema @ServerConfig
+          enriched = withDescription "Server configuration options"
+                   . describeProperties [("cfgHost", "Hostname or IP"), ("cfgPort", "TCP port number")]
+                   $ base
+      case enriched of
+        Object o -> do
+          KM.lookup "description" o `shouldBe` Just (String "Server configuration options")
+          case KM.lookup "properties" o of
+            Just (Object props) -> case KM.lookup "cfgHost" props of
+              Just (Object hostProp) -> KM.lookup "description" hostProp `shouldBe` Just (String "Hostname or IP")
+              other -> expectationFailure ("Expected host property object, got: " <> show other)
+            other -> expectationFailure ("Expected properties, got: " <> show other)
+        other -> expectationFailure ("Expected object, got: " <> show other)

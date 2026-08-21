@@ -78,9 +78,19 @@ module LLMonad
   , attempt
   , retry
 
-    -- * Prompt Helpers
+    -- * Prompt Helpers & Message Algebra
   , embed
   , embedShow
+  , Prompt (..)
+  , fewShot
+  , user
+  , assistant
+  , system
+  , toolResult
+  , ToPromptArg (..)
+
+    -- * Streaming
+  , streamSSE
 
     -- * Schema & Structured Output
   , ToSchema (..)
@@ -103,22 +113,36 @@ module LLMonad
   , mkTool
   , useTools
   , useToolsWith
+  , runAgent
+  , runAgentWith
+  , runAgentStructured
+  , runAgentStructuredWith
   , AgentOpts (..)
   , defaultAgentOpts
+
+    -- * Template Haskell
+  , prompt
+  , makeTool
+  , makeToolNamed
   ) where
 
 import LLMonad.API
+import LLMonad.Agent
 import LLMonad.Core
 import LLMonad.Interpreter.HTTP
 import LLMonad.Interpreter.Mock
 import LLMonad.Middleware.Cache
 import LLMonad.Middleware.RateLimit
 import LLMonad.Middleware.Trace
+import LLMonad.Prompt
 import LLMonad.Provider
 import LLMonad.Providers.Anthropic
 import LLMonad.Providers.OpenAICompatible
 import LLMonad.Schema
+import LLMonad.Streaming
 import LLMonad.Structured
+import LLMonad.TH
 import LLMonad.Tools
 import LLMonad.Types
+
 

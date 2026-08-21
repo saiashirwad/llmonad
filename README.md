@@ -1,92 +1,262 @@
 # LLMonad
 
-A Type-Safe, Composable Haskell Domain-Specific Language (DSL) for Large Language Models.
+A Type-Safe, Composable Haskell DSL for Large Language Models built on top of `effectful`.
 
-`LLMonad` provides an expressive, monadic interface for interacting with LLMs across major providers (OpenAI, Anthropic, DeepSeek, OpenRouter, Ollama, and custom endpoints) with first-class support for:
-
-- **Type-Driven Structured Outputs** (Generic JSON Schema derivation with automatic self-correcting retry loops)
-- **Autonomous ReAct Agents** (Type-safe function calling with automatic execution and result forwarding)
-- **Multi-Turn Stateful Conversations** (Automatic dialogue history tracking and prompt composition)
-- **Universal Provider Dispatch** (OpenAI-compatible endpoints and Anthropic Messages API)
-- **Real-Time Token Streaming** (Server-Sent Events streaming with chunk callbacks)
+`LLMonad` provides an elegant, expressive, and type-safe functional interface for interacting with Large Language Models across major providers (OpenAI, Anthropic, DeepSeek, OpenRouter, Groq, Ollama, and custom endpoints).
 
 ---
 
-## Quick Start
+## Key Capabilities
 
-### 1. Basic Conversational Chat
+- **`effectful` Architecture**: First-class `LLM` dynamic effect with pluggable network (`runLLMHTTP`) and pure in-memory mock (`runLLMMock`) interpreters.
+- **Curried Functional API (`ask`, `ask'`)**: Curried functions where the return type drives automatic JSON Schema derivation and decoding.
+- **Type-Driven Structured Outputs (`HasSchema`)**: Automatic GHC Generics JSON Schema derivation supporting strict OpenAI schemas and Anthropic tool schemas.
+- **Self-Correcting Error Recovery (`extractWithRetry`)**: Automatic feedback loop that feeds JSON validation errors back to the model for multi-turn repair.
+- **Autonomous Tool Agents (`runAgent`, `runAgentStructured`)**: Multi-step ReAct agent execution with cycle detection, configurable step bounds, and structured results.
+- **Template Haskell QuasiQuoting (`[prompt| ... |]`)**: Compile-time variable interpolation with `#{var}` syntax and `makeTool` function splices.
+- **Higher-Order Middleware**: Transparent in-memory response caching (`withCache`), request/response telemetry tracing (`withTrace`), and client-side token-bucket rate limiting (`withRateLimit`).
+- **Composable Message Algebra & Real-Time Streaming**: `Prompt` monoid with `IsString`, `fewShot` templating, message smart constructors, and Server-Sent Events (SSE) streaming (`streamSSE`, `streamText`).
+
+---
+
+## Installation
+
+Add `llmonad` and `effectful` to your `build-depends` in your `.cabal` file or `package.yaml`:
+
+```cabal
+build-depends:
+    base >= 4.16 && < 5,
+    llmonad,
+    effectful,
+    aeson,
+    text
+```
+
+---
+
+## Quick Tour
+
+### 1. High-Level Curried Functional API (`ask`, `ask'`)
+
+Define LLM queries as ordinary curried Haskell functions:
 
 ```haskell
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+
+import Data.Text (Text)
+import Effectful
+import GHC.Generics (Generic)
 import LLMonad
-import Data.Text.IO qualified as TIO
 
-main :: IO ()
-main = do
-  -- Use DeepSeek, OpenAI, Anthropic, or local Ollama
-  let cfg = defaultConfig (deepseek "sk-...")
-  
-  result <- runLLM cfg $ do
-    ans1 <- ask "What is the difference between a Functor and a Monad?"
-    liftIO $ TIO.putStrLn ans1
-    
-    ans2 <- ask "Can you give a practical Haskell example?"
-    liftIO $ TIO.putStrLn ans2
+data Sentiment = Positive | Negative | Neutral
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
-  print result
-```
-
----
-
-### 2. Type-Safe Structured Extraction
-
-Derive `HasSchema` and `FromJSON` using GHC Generics to extract typed data with schema validation and automatic self-correcting error recovery:
-
-```haskell
-{-# LANGUAGE DeriveGeneric, DeriveAnyClass, OverloadedStrings #-}
-
-data Sentiment = Positive | Neutral | Negative
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
-
-data CodeReview = CodeReview
-  { summary      :: Text
-  , sentiment    :: Sentiment
-  , issuesFound  :: [Text]
-  , qualityScore :: Int
+data SentimentReport = SentimentReport
+  { sentiment :: Sentiment
+  , confidence :: Double
+  , explanation :: Text
   }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
 
-reviewCode :: Text -> LLM CodeReview
-reviewCode snippet =
-  askStructured ("Perform a code review on:\n" <> snippet)
+-- | 1-argument curried function returning plain Text
+summarize :: (LLM :> es) => Text -> Eff es Text
+summarize = ask "Summarize this input in one concise sentence"
+
+-- | 1-argument curried function returning structured record
+analyzeSentiment :: (LLM :> es) => Text -> Eff es SentimentReport
+analyzeSentiment = ask "Analyze the sentiment of this text with confidence and explanation"
+
+-- | 2-argument curried function returning Bool
+compareThemes :: (LLM :> es) => Text -> Text -> Eff es Bool
+compareThemes = ask' "Do these two text snippets discuss the same primary theme?"
+
+-- | Applicative (<*>) and Monadic composition
+workflow :: (LLM :> es) => Text -> Eff es (Text, SentimentReport)
+workflow input = (,) <$> summarize input <*> analyzeSentiment input
 ```
 
 ---
 
-### 3. ReAct Agents & Tool Calling
+### 2. Type-Driven Structured Extraction with Self-Correction
 
-Define type-safe tools in pure Haskell and let the autonomous agent plan and execute multi-step tool calls:
+Extract strongly-typed data structures with automatic error recovery:
 
 ```haskell
-data CalcArgs = CalcArgs { op :: Text, a :: Double, b :: Double }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
-data CalcRes = CalcRes { result :: Double }
-  deriving (Show, Generic, FromJSON, ToJSON, HasSchema)
+import Data.Text (Text)
+import Effectful
+import GHC.Generics (Generic)
+import LLMonad
 
-calcTool :: Tool
-calcTool = defToolSync "calculator" "Perform arithmetic calculation" $ \(CalcArgs op a b) ->
-  case op of
-    "add" -> CalcRes (a + b)
-    "mul" -> CalcRes (a * b)
-    _     -> CalcRes 0.0
+data Priority = Low | Medium | High | Critical
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
+
+data BugReport = BugReport
+  { title :: Text
+  , priority :: Priority
+  , affectedModules :: [Text]
+  , estimatedFixHours :: Double
+  }
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
+
+-- | Direct structured extraction
+extractBug :: (LLM :> es) => Text -> Eff es BugReport
+extractBug input = askStructured @BugReport ("Extract bug report:\n" <> input)
+
+-- | Self-correcting retry loop (retries up to N times on decoding failure)
+extractBugSafe :: (LLM :> es) => Text -> Eff es BugReport
+extractBugSafe input = extractWithRetry @BugReport 3 ("Extract bug report:\n" <> input)
+```
+
+---
+
+### 3. Autonomous Tool-Calling Agents
+
+Register type-safe tools and let the autonomous agent plan, call tools, and return either text or structured outputs:
+
+```haskell
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
+import Data.Text (Text)
+import qualified Data.Text as T
+import Effectful
+import GHC.Generics (Generic)
+import LLMonad
+
+data StockArgs = StockArgs { ticker :: Text }
+  deriving (Show, Generic, FromJSON, ToSchema)
+
+data ConvertArgs = ConvertArgs { amount :: Double, toCurrency :: Text }
+  deriving (Show, Generic, FromJSON, ToSchema)
+
+-- | Tool with IO side-effects
+stockTool :: Tool
+stockTool = mkTool "stock_price" "Look up stock price in USD" $ \(args :: StockArgs) -> do
+  putStrLn ("Looking up ticker: " ++ T.unpack (ticker args))
+  pure (225.50 :: Double)
+
+-- | Synchronous pure tool
+convertTool :: Tool
+convertTool = toolSync "convert_currency" "Convert USD to target currency" $ \(args :: ConvertArgs) ->
+  amount args * 0.92
+
+myTools :: [Tool]
+myTools = [stockTool, convertTool]
+
+agentWorkflow :: (LLM :> es, IOE :> es) => Eff es Text
+agentWorkflow = runAgent myTools "What is the price of AAPL in EUR?"
+```
+
+---
+
+### 4. Template Haskell: `[prompt| ... |]` and `makeTool`
+
+Interpolate variables at compile-time and automatically generate tools from Haskell functions:
+
+```haskell
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
+
+import Data.Text (Text)
+import Effectful
+import GHC.Generics (Generic)
+import LLMonad
+
+data TaxArgs = TaxArgs { country :: Text, amount :: Double }
+  deriving (Show, Generic, FromJSON, ToJSON, ToSchema)
+
+-- | Ordinary function
+computeTax :: TaxArgs -> IO Double
+computeTax args = pure (amount args * 0.19)
+
+-- Close declaration group for Template Haskell reification
+$(return [])
+
+-- Automatically generate Tool from function
+taxTool :: Tool
+taxTool = $(makeTool 'computeTax)
+
+promptWorkflow :: (LLM :> es, IOE :> es) => Text -> Double -> Eff es Text
+promptWorkflow customer price = do
+  let query = [prompt|Customer #{customer} purchased items totaling $#{price}. Compute tax.|]
+  runAgent [taxTool] query
+```
+
+---
+
+### 5. Pluggable Interpreters & Middleware Stacking
+
+Stack transparent caching, rate limiting, and telemetry tracing over HTTP or Mock interpreters:
+
+```haskell
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+import Effectful
+import LLMonad
+import System.Environment (getEnv)
 
 main :: IO ()
 main = do
-  let cfg = defaultConfig (openai "sk-...")
-  res <- runLLM cfg $
-    runAgentWith [calcTool] "What is 42 multiplied by 137, plus 10?"
-  print res
+  apiKey <- getEnv "OPENAI_API_KEY"
+  cache <- newInMemoryCache
+  limiter <- newRateLimiter 10 1.0 -- 10 req/sec
+
+  let tracer :: Trace -> IO ()
+      tracer = \case
+        TraceRequest m sys _ -> putStrLn ("[TRACE] Request to " ++ show m)
+        TraceResponse txt _ _ -> putStrLn ("[TRACE] Response length: " ++ show (length (show txt)))
+        TraceToolExecuted name ok _ -> putStrLn ("[TRACE] Tool " ++ show name ++ " status: " ++ show ok)
+        TraceError err -> putStrLn ("[TRACE] Error: " ++ show err)
+
+  let cfg = defaultConfig (openAIProvider (T.pack apiKey)) "gpt-4o-mini"
+
+  runEff
+    . runLLMHTTP cfg
+    . withRateLimit limiter
+    . withCache cache
+    . withTrace tracer
+    $ do
+      ans <- generateText "Hello, world!"
+      liftIO (putStrLn ans)
+```
+
+---
+
+### 6. Offline Testing with Pure In-Memory Mock Interpreter
+
+Test complex LLM interactions, tool calls, and structured extraction in pure unit tests without API keys or network requests:
+
+```haskell
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+import Effectful
+import LLMonad
+
+testScript :: [Either LLMError CompletionResponse]
+testScript =
+  [ Right (textResp "Hello from mock model!")
+  ]
+
+runTest :: (Text, [CompletionRequest])
+runTest = runPureEff $ runLLMMock testScript (generateText "Say hello")
 ```
 
 ---
@@ -95,30 +265,45 @@ main = do
 
 | Provider | Constructor | Default Model | Protocol Format |
 | :--- | :--- | :--- | :--- |
-| **DeepSeek** | `deepseek "api-key"` | `deepseek-chat` | OpenAI-compatible |
-| **OpenAI** | `openai "api-key"` | `gpt-4o-mini` | OpenAI-compatible |
-| **Anthropic** | `anthropic "api-key"` | `claude-3-5-sonnet-20241022` | Anthropic Messages API |
-| **OpenRouter** | `openrouter "api-key"` | `deepseek/deepseek-chat` | OpenAI-compatible |
-| **Ollama** | `ollama` | `llama3.2` | Local (`localhost:11434`) |
-| **Custom OpenAI** | `openaiCompatible "name" "url" maybeKey` | Configurable | OpenAI-compatible |
-| **Custom Anthropic** | `anthropicCompatible "name" "url" "key"` | Configurable | Anthropic Messages API |
+| **OpenAI** | `openAIProvider key` | `gpt-4o-mini` | OpenAI-compatible (`/v1/chat/completions`) |
+| **Anthropic** | `anthropicProvider key` | `claude-sonnet-4-5` | Anthropic Messages API (`/v1/messages`) |
+| **DeepSeek** | `deepSeekProvider key` | `deepseek-chat` | OpenAI-compatible (`https://api.deepseek.com`) |
+| **OpenRouter** | `openRouterProvider key` | `openai/gpt-4o-mini` | OpenAI-compatible (`https://openrouter.ai/api/v1`) |
+| **Groq** | `groqProvider key` | `llama-3.3-70b-versatile` | OpenAI-compatible (`https://api.groq.com/openai/v1`) |
+| **Ollama** | `ollamaProvider host` | `llama3.2` | Local OpenAI-compatible endpoint |
 
 ---
 
-## Architecture
+## Standalone Examples
 
-- **`LLMonad.Core`**: Monad transformer `LLMT m a`, `LLM a`, `MonadLLM` class, configuration, runners.
-- **`LLMonad.Types`**: Unified message representation (`Role`, `Message`, `ToolCall`, `ChatRequest`, `ChatResponse`).
-- **`LLMonad.Schema`**: GHC Generics-based JSON Schema engine.
-- **`LLMonad.Structured`**: Type-driven extraction with self-correcting validation loops.
-- **`LLMonad.Tools`**: Type-safe tool definition and dynamic invocation.
-- **`LLMonad.Agent`**: Autonomous multi-step ReAct agent execution loop.
-- **`LLMonad.Prompt`**: Conversational primitives, few-shot helpers, and template substitution.
-- **`LLMonad.Streaming`**: SSE token streaming with callback hooks.
-- **`LLMonad.Client`**: Universal HTTP dispatcher across OpenAI and Anthropic protocol styles.
+Explore standalone, runnable example programs in the `examples/` directory:
+
+1. **`examples/01_CurriedAPI.hs`**: Curried `ask` & `ask'`, 0/1/2 arguments, records, and Applicative `<*>` composition.
+2. **`examples/02_StructuredOutput.hs`**: Schema derivation with GHC Generics, `askStructured`, and `extractWithRetry` self-correction.
+3. **`examples/03_AgentWithTools.hs`**: Multi-step ReAct agent loops, `mkTool`, `toolSync`, `runAgent`, `runAgentStructured`, and cycle detection.
+4. **`examples/04_QuasiQuotes.hs`**: `[prompt| ... |]` compile-time interpolation and `makeTool` splices.
+5. **`examples/05_EffectfulHandlers.hs`**: Middleware stacking with `withCache`, `withTrace`, and `withRateLimit`.
+
+Run any example with:
+
+```bash
+cabal exec ghc -- -package llmonad examples/01_CurriedAPI.hs -o /tmp/ex01 && /tmp/ex01
+```
+
+---
+
+## Running the Demo Executable
+
+Run the guided tour CLI demo with:
+
+```bash
+cabal run llmonad
+```
+
+If API keys are present (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, etc.), the demo connects live. Otherwise, it runs smoothly in offline mock mode showcasing all 5 feature tiers.
 
 ---
 
 ## License
 
-MIT License.
+MIT License. Copyright (c) Sai Ashirwad.
