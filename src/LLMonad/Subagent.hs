@@ -231,7 +231,7 @@ runSubagent ::
   [Tool (Eff es)] ->
   Eff es SubagentResult
 runSubagent args parentTools = withIsolatedLLM $ do
-  recordEvent (ToolInvoked "subagent" (toJSON args))
+  recordEvent (ToolInvoked "subagent" "subagent" (toJSON args))
   let childTools = filterSubagentTools args parentTools
   let maxR = max 1 (fromMaybe 8 (maxRounds args))
   let opts = defaultAgentOpts { agentMaxRounds = maxR }

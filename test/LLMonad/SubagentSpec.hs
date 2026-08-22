@@ -76,7 +76,7 @@ spec = describe "LLMonad.Subagent (Milestone 3)" $ do
       srOutput res `shouldBe` "Analysis complete: Module has no syntax errors."
       length journalEvents `shouldBe` 2
       case journalEvents of
-        [ToolInvoked "subagent" _, ToolCompleted "subagent" _] -> pure ()
+        [ToolInvoked "subagent" _ _, ToolCompleted "subagent" _] -> pure ()
         other -> expectationFailure ("Expected subagent start/finish journal events, got: " <> show other)
 
   describe "4. Asynchronous Subagent Delegation (Green Threads)" $ do

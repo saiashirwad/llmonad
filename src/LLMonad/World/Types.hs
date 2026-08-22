@@ -52,6 +52,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time (UTCTime)
 import GHC.Generics (Generic)
+import System.FilePath (normalise)
 
 -- | Detailed directory or file entry metadata.
 data DirEntry = DirEntry
@@ -219,7 +220,7 @@ data MemoryWorldState = MemoryWorldState
 -- | Initialize in-memory world state with a set of file contents.
 initMemoryWorld :: [(FilePath, Text)] -> MemoryWorldState
 initMemoryWorld initialFiles = MemoryWorldState
-  { mwsFiles           = Map.fromList initialFiles
+  { mwsFiles           = Map.fromList [(dropWhile (== '/') (normalise p), c) | (p, c) <- initialFiles]
   , mwsWorkingDir      = "/"
   , mwsCommandHandlers = Map.empty
   , mwsCommandHistory  = []

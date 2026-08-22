@@ -1,3 +1,6 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Provider-neutral vocabulary shared by the DSL, the transports, and the
@@ -34,9 +37,11 @@ module LLMonad.Types
   ) where
 
 import Control.Applicative ((<|>))
-import Data.Aeson (Value)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, (.:?), (.=))
+import qualified Data.Aeson as Aeson
 import Data.String (IsString)
 import Data.Text (Text)
+import GHC.Generics (Generic)
 
 -- | Identifier of the model to hit, e.g. @\"gpt-4o-mini\"@ or
 -- @\"claude-sonnet-4-5\"@. Has an 'IsString' instance so literals work
@@ -54,7 +59,34 @@ data ToolCall = ToolCall
   , toolCallName :: Text
   , toolCallArguments :: Value
   }
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Generic)
+
+instance ToJSON ToolCall where
+  toJSON (ToolCall cid name args) =
+    Aeson.object
+      [ "id" .= cid
+      , "name" .= name
+      , "arguments" .= args
+      ]
+
+instance FromJSON ToolCall where
+  parseJSON = Aeson.withObject "ToolCall" $ \o -> do
+    cid <- o .:? "id" >>= \case
+      Just i -> pure i
+      Nothing -> o .:? "toolCallId" >>= \case
+        Just i -> pure i
+        Nothing -> pure ""
+    name <- o .:? "name" >>= \case
+      Just n -> pure n
+      Nothing -> o .:? "toolName" >>= \case
+        Just n -> pure n
+        Nothing -> pure ""
+    args <- o .:? "arguments" >>= \case
+      Just a -> pure a
+      Nothing -> o .:? "args" >>= \case
+        Just a -> pure a
+        Nothing -> pure Aeson.Null
+    pure (ToolCall cid name args)
 
 -- | A single message in a conversation, covering every role and the
 -- tool-calling shapes of both supported protocols.

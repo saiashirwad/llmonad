@@ -148,6 +148,8 @@ module LLMonad
   , Journal (..)
   , JournalEvent (TurnStarted, ModelTurn, ToolInvoked, ToolCompleted, MetricsReported, TurnFinished)
   , pattern JournalUserMsg
+  , pattern ModelTurnSimple
+  , pattern ToolInvokedSimple
   , ModelMetrics (..)
   , ReplaySummary (..)
   , JournalState (..)
@@ -156,7 +158,9 @@ module LLMonad
   , clearEvents
   , recordUserMsg
   , recordModelTurn
+  , recordModelTurnWithCalls
   , recordToolCall
+  , recordToolCallWithId
   , recordToolResult
   , recordMetrics
   , recordTurnStart
@@ -172,6 +176,7 @@ module LLMonad
   , replayAudit
   , replayAuditSummary
   , loadJournalFile
+  , loadJournalFileWorld
   , loadJournalText
   , reconstructChatHistory
     -- * Terminal User Interface (Brick + Vty)

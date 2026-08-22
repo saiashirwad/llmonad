@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 
@@ -9,6 +10,9 @@ module LLMonad.Journal.Types
   ( -- * Core Event Types
     JournalEvent (..)
   , pattern JournalUserMsg
+  , pattern ModelTurnSimple
+  , pattern ToolInvokedSimple
+  , ToolCall (..)
   , ModelMetrics (..)
   , promptTokens
   , completionTokens
@@ -29,11 +33,14 @@ module LLMonad.Journal.Types
   , initJournalState
   ) where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), Value, (.:), (.=))
+import Control.Applicative ((<|>))
+import Data.Aeson (FromJSON (..), ToJSON (..), Value, (.:), (.:?), (.=), (.!=))
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as AesonTypes
 import Data.Text (Text)
+import qualified Data.Text as T
 import GHC.Generics (Generic)
+import LLMonad.Types (ToolCall (..))
 
 -- | Result of running a tool: either an error message or a JSON payload.
 type ToolResult = Either Text Value
@@ -81,8 +88,8 @@ emptyModelMetrics modelName = ModelMetrics
 data JournalEvent
   = TurnStarted !Text
   | UserMsg !Text
-  | ModelTurn !Text
-  | ToolInvoked !Text !Value
+  | ModelTurn !Text ![ToolCall]
+  | ToolInvoked !Text !Text !Value
   | ToolCompleted !Text !ToolResult
   | MetricsReported !ModelMetrics
   | TurnFinished !Text
@@ -92,18 +99,43 @@ data JournalEvent
 pattern JournalUserMsg :: Text -> JournalEvent
 pattern JournalUserMsg txt = UserMsg txt
 
+-- | Convenience pattern synonym for 'ModelTurn' with empty tool calls.
+pattern ModelTurnSimple :: Text -> JournalEvent
+pattern ModelTurnSimple txt <- ModelTurn txt _
+  where
+    ModelTurnSimple txt = ModelTurn txt []
+
+-- | Convenience pattern synonym for 'ToolInvoked' where toolCallId equals toolName.
+pattern ToolInvokedSimple :: Text -> Value -> JournalEvent
+pattern ToolInvokedSimple name args <- ToolInvoked _ name args
+  where
+    ToolInvokedSimple name args = ToolInvoked name name args
+
 instance ToJSON JournalEvent where
   toJSON = \case
     TurnStarted tid ->
       Aeson.object ["type" .= ("TurnStarted" :: Text), "turnId" .= tid]
     UserMsg content ->
       Aeson.object ["type" .= ("UserMsg" :: Text), "content" .= content]
-    ModelTurn content ->
-      Aeson.object ["type" .= ("ModelTurn" :: Text), "content" .= content]
-    ToolInvoked toolName args ->
-      Aeson.object ["type" .= ("ToolInvoked" :: Text), "toolName" .= toolName, "arguments" .= args]
-    ToolCompleted toolName res ->
-      Aeson.object ["type" .= ("ToolCompleted" :: Text), "toolName" .= toolName, "result" .= res]
+    ModelTurn content calls ->
+      Aeson.object
+        [ "type" .= ("ModelTurn" :: Text)
+        , "content" .= content
+        , "toolCalls" .= calls
+        ]
+    ToolInvoked callId name args ->
+      Aeson.object
+        [ "type" .= ("ToolInvoked" :: Text)
+        , "toolCallId" .= callId
+        , "toolName" .= name
+        , "arguments" .= args
+        ]
+    ToolCompleted callId res ->
+      Aeson.object
+        [ "type" .= ("ToolCompleted" :: Text)
+        , "toolCallId" .= callId
+        , "result" .= res
+        ]
     MetricsReported metrics ->
       Aeson.object ["type" .= ("MetricsReported" :: Text), "metrics" .= metrics]
     TurnFinished tid ->
@@ -115,9 +147,37 @@ instance FromJSON JournalEvent where
     case (tag :: Text) of
       "TurnStarted" -> TurnStarted <$> o .: "turnId"
       "UserMsg" -> UserMsg <$> o .: "content"
-      "ModelTurn" -> ModelTurn <$> o .: "content"
-      "ToolInvoked" -> ToolInvoked <$> o .: "toolName" <*> o .: "arguments"
-      "ToolCompleted" -> ToolCompleted <$> o .: "toolName" <*> o .: "result"
+      "ModelTurn" -> do
+        content <- o .: "content"
+        calls <- (o .:? "toolCalls" <|> o .:? "tool_calls") .!= []
+        pure (ModelTurn content calls)
+      "ToolInvoked" -> do
+        name <- o .:? "toolName" >>= \case
+          Just n -> pure n
+          Nothing -> o .:? "name" >>= \case
+            Just n -> pure n
+            Nothing -> pure ""
+        callId <- o .:? "toolCallId" >>= \case
+          Just cid -> pure cid
+          Nothing -> o .:? "id" >>= \case
+            Just cid -> pure cid
+            Nothing -> pure name
+        args <- o .:? "arguments" >>= \case
+          Just a -> pure a
+          Nothing -> o .:? "args" >>= \case
+            Just a -> pure a
+            Nothing -> pure Aeson.Null
+        pure (ToolInvoked callId (if T.null name then callId else name) args)
+      "ToolCompleted" -> do
+        callId <- o .:? "toolCallId" >>= \case
+          Just cid -> pure cid
+          Nothing -> o .:? "id" >>= \case
+            Just cid -> pure cid
+            Nothing -> o .:? "toolName" >>= \case
+              Just tn -> pure tn
+              Nothing -> pure ""
+        res <- (o .: "result") <|> (Right <$> o .: "result")
+        pure (ToolCompleted callId res)
       "MetricsReported" -> MetricsReported <$> o .: "metrics"
       "TurnFinished" -> TurnFinished <$> o .: "turnId"
       other -> AesonTypes.prependFailure "parsing JournalEvent failed: "

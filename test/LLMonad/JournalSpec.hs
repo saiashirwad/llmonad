@@ -31,23 +31,28 @@ spec = do
         let ev = UserMsg "Hello, please list the directory files."
         eitherDecode (encode ev) `shouldBe` Right ev
 
-      it "roundtrips ModelTurn event" $ do
-        let ev = ModelTurn "I will check the files for you."
+      it "roundtrips ModelTurn event without tool calls" $ do
+        let ev = ModelTurn "I will check the files for you." []
         eitherDecode (encode ev) `shouldBe` Right ev
 
-      it "roundtrips ToolInvoked event with JSON arguments" $ do
+      it "roundtrips ModelTurn event with tool calls" $ do
+        let tc = ToolCall "call_123" "view_file" (object ["path" .= ("src/Main.hs" :: Text)])
+            ev = ModelTurn "Let me view the file." [tc]
+        eitherDecode (encode ev) `shouldBe` Right ev
+
+      it "roundtrips ToolInvoked event with toolCallId and JSON arguments" $ do
         let args = object ["path" .= ("src/Main.hs" :: Text), "lines" .= ([1, 50] :: [Int])]
-            ev = ToolInvoked "view_file" args
+            ev = ToolInvoked "call_view_1" "view_file" args
         eitherDecode (encode ev) `shouldBe` Right ev
 
       it "roundtrips ToolCompleted event with success payload" $ do
         let res = Right (object ["content" .= ("module Main where" :: Text)])
-            ev = ToolCompleted "view_file" res
+            ev = ToolCompleted "call_view_1" res
         eitherDecode (encode ev) `shouldBe` Right ev
 
       it "roundtrips ToolCompleted event with error string" $ do
         let res = Left "File not found: missing.txt"
-            ev = ToolCompleted "view_file" res
+            ev = ToolCompleted "call_view_1" res
         eitherDecode (encode ev) `shouldBe` Right ev
 
       it "roundtrips MetricsReported event" $ do
@@ -92,9 +97,9 @@ spec = do
         let program = do
               recordEvent (TurnStarted "turn-1")
               recordEvent (UserMsg "Create a new file.")
-              recordEvent (ToolInvoked "write_file" (object ["path" .= ("foo.txt" :: Text)]))
-              recordEvent (ToolCompleted "write_file" (Right (object ["bytes" .= (12 :: Int)])))
-              recordEvent (ModelTurn "File created.")
+              recordEvent (ToolInvoked "call_1" "write_file" (object ["path" .= ("foo.txt" :: Text)]))
+              recordEvent (ToolCompleted "call_1" (Right (object ["bytes" .= (12 :: Int)])))
+              recordEvent (ModelTurn "File created." [])
               recordEvent (TurnFinished "turn-1")
               getEvents
 
@@ -123,9 +128,9 @@ spec = do
         events `shouldBe`
           [ TurnStarted "turn-2"
           , UserMsg "What is 2+2?"
-          , ToolInvoked "calc" (object ["expr" .= ("2+2" :: Text)])
+          , ToolInvoked "calc" "calc" (object ["expr" .= ("2+2" :: Text)])
           , ToolCompleted "calc" (Right (object ["result" .= (4 :: Int)]))
-          , ModelTurn "The answer is 4."
+          , ModelTurn "The answer is 4." []
           , MetricsReported (ModelMetrics 50 10 60 45.0 "test-model")
           , TurnFinished "turn-2"
           ]
@@ -179,7 +184,7 @@ spec = do
           parsedEvents `shouldBe`
             [ Right (TurnStarted "t-1")
             , Right (UserMsg "Hello disk journal")
-            , Right (ModelTurn "Hello user")
+            , Right (ModelTurn "Hello user" [])
             , Right (TurnFinished "t-1")
             ]
 
@@ -245,6 +250,12 @@ spec = do
           val `shouldBe` "done"
           evs `shouldBe` [UserMsg "hello with events"]
 
+      it "fails closed (throws IO exception) on corrupted file in runJournalFile" $ do
+        withSystemTempDirectory "journal_corrupt_run" $ \tmpDir -> do
+          let badPath = tmpDir ++ "/corrupted.jsonl"
+          TIO.writeFile badPath "{\"type\":\"TurnStarted\",\"turnId\":\"1\"}\nNOT_VALID_JSON\n"
+          runEff (runJournalFile badPath (recordUserMsg "hello")) `shouldThrow` anyIOException
+
     describe "World-based Journal Persistence (runJournalFileWorld)" $ do
       it "writes and reads journal records in MemoryWorld virtual filesystem" $ do
         let virtualFs = initMemoryWorld []
@@ -261,9 +272,15 @@ spec = do
         events `shouldBe`
           [ TurnStarted "vw-1"
           , UserMsg "Virtual world event"
-          , ModelTurn "Virtual world answer"
+          , ModelTurn "Virtual world answer" []
           , TurnFinished "vw-1"
           ]
+
+      it "fails closed on corrupted file in runJournalFileWorld" $ do
+        let badContent = "{\"type\":\"TurnStarted\",\"turnId\":\"1\"}\nCORRUPTED_JSON\n"
+        let virtualFs = initMemoryWorld [("/workspace/.journal/corrupted.jsonl", badContent)]
+        let program = runJournalFileWorld "/workspace/.journal/corrupted.jsonl" (recordUserMsg "test")
+        runEff (runWorldMemory virtualFs program) `shouldThrow` anyException
 
     describe "Session Resume (resumeSession & reconstructChatHistory)" $ do
       it "resumes events from a JSONL file and reconstructs ChatMessage history" $ do
@@ -272,9 +289,9 @@ spec = do
           runEff $ runJournalFile journalPath $ do
             recordTurnStart "t1"
             recordUserMsg "List files in directory"
-            recordToolCall "list_files" (object ["dir" .= ("." :: Text)])
-            recordToolResult "list_files" (Right (object ["files" .= (["a.txt", "b.txt"] :: [Text])]))
-            recordModelTurn "I see a.txt and b.txt."
+            recordToolCallWithId "call_123" "list_files" (object ["dir" .= ("." :: Text)])
+            recordToolResult "call_123" (Right (object ["files" .= (["a.txt", "b.txt"] :: [Text])]))
+            recordModelTurnWithCalls "I see a.txt and b.txt." [ToolCall "call_123" "list_files" (object ["dir" .= ("." :: Text)])]
             recordTurnFinish "t1"
 
           resumedEvents <- runEff (resumeSession journalPath)
@@ -284,8 +301,8 @@ spec = do
           length chatHistory `shouldBe` 3
           chatHistory `shouldBe`
             [ CoreTypes.UserMsg "List files in directory"
-            , CoreTypes.ToolMsg "list_files" "{\"files\":[\"a.txt\",\"b.txt\"]}"
-            , CoreTypes.AssistantMsg "I see a.txt and b.txt." []
+            , CoreTypes.ToolMsg "call_123" "{\"files\":[\"a.txt\",\"b.txt\"]}"
+            , CoreTypes.AssistantMsg "I see a.txt and b.txt." [ToolCall "call_123" "list_files" (object ["dir" .= ("." :: Text)])]
             ]
 
       it "returns empty event list when resuming non-existent file" $ do
@@ -299,6 +316,12 @@ spec = do
           res <- runEff (loadJournalFile badPath)
           res `shouldSatisfy` (\case Left _ -> True; Right _ -> False)
 
+      it "fails closed (throws IO exception) when resumeSession encounters corrupted file" $ do
+        withSystemTempDirectory "journal_bad_resume" $ \tmpDir -> do
+          let badPath = tmpDir ++ "/corrupted.jsonl"
+          TIO.writeFile badPath "{\"type\":\"TurnStarted\",\"turnId\":\"1\"}\nNOT_VALID_JSON\n"
+          runEff (resumeSession badPath) `shouldThrow` anyIOException
+
       it "resumes session via World effect with resumeSessionWorld" $ do
         let jsonlText = "{\"type\":\"TurnStarted\",\"turnId\":\"t1\"}\n{\"type\":\"UserMsg\",\"content\":\"hi\"}\n{\"type\":\"TurnFinished\",\"turnId\":\"t1\"}\n"
         let virtualFs = initMemoryWorld [("workspace/session.jsonl", jsonlText)]
@@ -307,19 +330,26 @@ spec = do
         (events, _) <- runEff (runWorldMemory virtualFs program)
         events `shouldBe` [TurnStarted "t1", UserMsg "hi", TurnFinished "t1"]
 
+      it "fails closed when resumeSessionWorld encounters corrupted file" $ do
+        let badContent = "{\"type\":\"TurnStarted\",\"turnId\":\"t1\"}\nCORRUPT_JSON_DATA\n"
+        let virtualFs = initMemoryWorld [("workspace/corrupted.jsonl", badContent)]
+        let program = resumeSessionWorld "workspace/corrupted.jsonl"
+
+        runEff (runWorldMemory virtualFs program) `shouldThrow` anyException
+
     describe "Audit Replay Verification (replayAudit & replayAuditSummary)" $ do
       it "validates a correct multi-turn session and aggregates metrics" $ do
         let events =
               [ TurnStarted "turn-1"
               , UserMsg "Question 1"
-              , ToolInvoked "search" (object ["q" .= ("cats" :: Text)])
-              , ToolCompleted "search" (Right (object ["count" .= (3 :: Int)]))
-              , ModelTurn "Found 3 cats."
+              , ToolInvoked "call_1" "search" (object ["q" .= ("cats" :: Text)])
+              , ToolCompleted "call_1" (Right (object ["count" .= (3 :: Int)]))
+              , ModelTurn "Found 3 cats." []
               , MetricsReported (ModelMetrics 100 30 130 120.0 "gpt-4o")
               , TurnFinished "turn-1"
               , TurnStarted "turn-2"
               , UserMsg "Question 2"
-              , ModelTurn "Answer 2."
+              , ModelTurn "Answer 2." []
               , MetricsReported (ModelMetrics 200 50 250 210.5 "gpt-4o")
               , TurnFinished "turn-2"
               ]
@@ -352,7 +382,7 @@ spec = do
       it "flags validation error on uncompleted ToolInvoked" $ do
         let events =
               [ TurnStarted "t1"
-              , ToolInvoked "dangling_tool" (object [])
+              , ToolInvoked "dangling_id" "dangling_tool" (object [])
               , TurnFinished "t1"
               ]
         case replayAudit events of

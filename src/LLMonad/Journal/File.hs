@@ -15,6 +15,7 @@ module LLMonad.Journal.File
   , runJournalFileWorld
   ) where
 
+import qualified Control.Exception as Exception
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -33,8 +34,10 @@ import LLMonad.World (World, doesFileExist, readFileText, writeFileText)
 import qualified System.Directory as Directory
 import qualified System.FilePath as FilePath
 import qualified System.IO as IO
+import qualified System.IO.Error as IO
 
 -- | Persist session journal events to a JSONL file on disk using standard IO with immediate line flushing.
+-- Fails closed (throws an IO exception) if the existing journal file is corrupted.
 runJournalFile ::
   (IOE :> es) =>
   FilePath ->
@@ -46,11 +49,13 @@ runJournalFile fp action = do
   initialEvents <- if exists
     then liftIO $ do
       content <- TIO.readFile fp
-      case loadJournalText content of
-        Left _ -> pure []
-        Right evs -> pure evs
+      if T.null (T.strip content)
+        then pure []
+        else case loadJournalText content of
+          Left err -> IO.ioError (IO.userError ("Failed to load corrupted journal file " ++ fp ++ ": " ++ T.unpack err))
+          Right evs -> pure evs
     else pure []
-  eventsRef <- liftIO $ newIORef initialEvents
+  eventsRef <- liftIO $ newIORef (reverse initialEvents)
   interpret (fileJournalHandler fp eventsRef) action
 
 -- | Run file journal interpreter and return both the computation result and the final list of events.
@@ -76,16 +81,17 @@ fileJournalHandler fp eventsRef _ = \case
       IO.hSetBuffering h IO.LineBuffering
       BS.hPut h (lineBytes <> "\n")
       IO.hFlush h
-    atomicModifyIORef' eventsRef (\evs -> (evs ++ [ev], ()))
+    atomicModifyIORef' eventsRef (\revEvs -> (ev : revEvs, ()))
 
   GetEvents -> liftIO $ do
-    readIORef eventsRef
+    reverse <$> readIORef eventsRef
 
   ClearEvents -> liftIO $ do
     atomicWriteIORef eventsRef []
     IO.writeFile fp ""
 
 -- | Persist session journal events via the 'World' effect (compatible with MemoryWorld and WorktreeWorld).
+-- Fails closed (throws an IO exception) if the existing journal file is corrupted.
 runJournalFileWorld ::
   forall es a.
   (World :> es) =>
@@ -95,9 +101,11 @@ runJournalFileWorld ::
 runJournalFileWorld fp action = do
   exists <- doesFileExist fp
   initialText <- if exists then readFileText fp else pure ""
-  let initialEvents = case loadJournalText initialText of
-        Left _ -> []
-        Right evs -> evs
+  initialEvents <- if exists && not (T.null (T.strip initialText))
+    then case loadJournalText initialText of
+      Left err -> Exception.throw (IO.userError ("Failed to load corrupted journal file " ++ fp ++ ": " ++ T.unpack err))
+      Right evs -> pure evs
+    else pure []
   fmap fst $ reinterpret (runState (initialEvents, initialText)) worldJournalHandler action
   where
     worldJournalHandler :: EffectHandler Journal (State ([JournalEvent], Text) : es)

@@ -17,7 +17,9 @@ module LLMonad.Journal
   , clearEvents
   , recordUserMsg
   , recordModelTurn
+  , recordModelTurnWithCalls
   , recordToolCall
+  , recordToolCallWithId
   , recordToolResult
   , recordMetrics
   , recordTurnStart
@@ -29,6 +31,7 @@ module LLMonad.Journal
   , replayAudit
   , replayAuditSummary
   , loadJournalFile
+  , loadJournalFileWorld
   , loadJournalText
   , reconstructChatHistory
 
@@ -67,17 +70,25 @@ clearEvents = send ClearEvents
 recordUserMsg :: (Journal :> es) => Text -> Eff es ()
 recordUserMsg txt = recordEvent (UserMsg txt)
 
--- | Convenience helper to record an assistant model turn.
+-- | Convenience helper to record an assistant model turn without tool calls.
 recordModelTurn :: (Journal :> es) => Text -> Eff es ()
-recordModelTurn txt = recordEvent (ModelTurn txt)
+recordModelTurn txt = recordEvent (ModelTurn txt [])
 
--- | Convenience helper to record a tool invocation.
+-- | Convenience helper to record an assistant model turn with tool calls.
+recordModelTurnWithCalls :: (Journal :> es) => Text -> [ToolCall] -> Eff es ()
+recordModelTurnWithCalls txt calls = recordEvent (ModelTurn txt calls)
+
+-- | Convenience helper to record a tool invocation where toolCallId equals toolName.
 recordToolCall :: (Journal :> es) => Text -> Value -> Eff es ()
-recordToolCall name args = recordEvent (ToolInvoked name args)
+recordToolCall name args = recordEvent (ToolInvoked name name args)
+
+-- | Convenience helper to record a tool invocation with explicit provider toolCallId.
+recordToolCallWithId :: (Journal :> es) => Text -> Text -> Value -> Eff es ()
+recordToolCallWithId cid name args = recordEvent (ToolInvoked cid name args)
 
 -- | Convenience helper to record a tool execution result.
 recordToolResult :: (Journal :> es) => Text -> ToolResult -> Eff es ()
-recordToolResult name res = recordEvent (ToolCompleted name res)
+recordToolResult cid res = recordEvent (ToolCompleted cid res)
 
 -- | Convenience helper to record model execution metrics.
 recordMetrics :: (Journal :> es) => ModelMetrics -> Eff es ()

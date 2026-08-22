@@ -19,6 +19,7 @@ module LLMonad.Providers.Anthropic
 
     -- * Pure internals (exposed for testing)
   , buildMessagesBody
+  , encodeAnthropicMessages
   , parseMessagesResponse
   , AntStreamState (..)
   , initialAntStreamState

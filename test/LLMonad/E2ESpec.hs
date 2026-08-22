@@ -175,9 +175,9 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
         let events =
               [ TurnStarted "turn-1"
               , JournalUserMsg "Query 1"
-              , ToolInvoked "toolA" (object [])
+              , ToolInvoked "toolA" "toolA" (object [])
               , ToolCompleted "toolA" (Right (object ["status" .= ("ok" :: Text)]))
-              , ModelTurn "Done 1"
+              , ModelTurn "Done 1" []
               , MetricsReported (ModelMetrics 150 50 200 120.0 "gpt-4o")
               , TurnFinished "turn-1"
               ]
@@ -572,7 +572,7 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
         -- Journal events recorded properly
         length journalEvs `shouldBe` 2
         case journalEvs of
-          [ToolInvoked "subagent" _, ToolCompleted "subagent" _] -> pure ()
+          [ToolInvoked "subagent" _ _, ToolCompleted "subagent" _] -> pure ()
           other -> expectationFailure ("Expected subagent tool start/finish events, got: " <> show other)
 
     it "Interaction 2: World Local operations logged to Journal and verified by Audit Replay" $ do

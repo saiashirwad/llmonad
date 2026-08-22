@@ -13,11 +13,13 @@ module LLMonad.Journal.Replay
     -- * Session Deserialization & Resume
   , loadJournalText
   , loadJournalFile
+  , loadJournalFileWorld
   , resumeSession
   , resumeSessionWorld
   , reconstructChatHistory
   ) where
 
+import qualified Control.Exception as Exception
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (foldl')
@@ -31,6 +33,7 @@ import LLMonad.Types (ChatMessage)
 import qualified LLMonad.Types as CoreTypes
 import LLMonad.World (World, doesFileExist, readFileText)
 import qualified System.Directory as Directory
+import qualified System.IO.Error as IO
 
 -- | Validation state accumulator used during audit replay traversal.
 data AuditState = AuditState
@@ -110,18 +113,18 @@ replayAuditSummary events =
       UserMsg _ ->
         st { asUserMessages = asUserMessages st + 1 }
 
-      ModelTurn _ ->
+      ModelTurn _ _ ->
         st { asModelTurns = asModelTurns st + 1 }
 
-      ToolInvoked toolName _ ->
+      ToolInvoked toolCallId _ _ ->
         st
           { asToolInvocations  = asToolInvocations st + 1
-          , asPendingToolCalls = asPendingToolCalls st ++ [toolName]
+          , asPendingToolCalls = asPendingToolCalls st ++ [toolCallId]
           }
 
-      ToolCompleted toolName _ ->
+      ToolCompleted toolCallId _ ->
         let pending = asPendingToolCalls st
-        in case removeFirst toolName pending of
+        in case removeFirst toolCallId pending of
             Just remaining ->
               st
                 { asToolCompletions  = asToolCompletions st + 1
@@ -130,7 +133,7 @@ replayAuditSummary events =
             Nothing ->
               st
                 { asToolCompletions  = asToolCompletions st + 1
-                , asValidationErrors = asValidationErrors st ++ ["ToolCompleted without matching ToolInvoked: " <> toolName]
+                , asValidationErrors = asValidationErrors st ++ ["ToolCompleted without matching ToolInvoked: " <> toolCallId]
                 }
 
       MetricsReported mm ->
@@ -144,7 +147,7 @@ replayAuditSummary events =
     finalizeAudit :: AuditState -> AuditState
     finalizeAudit st =
       let turnErrors = [ "Turn was started but never finished: " <> tid | tid <- asOpenTurns st ]
-          toolErrors = [ "Tool invocation was never completed: " <> toolName | toolName <- asPendingToolCalls st ]
+          toolErrors = [ "Tool invocation was never completed: " <> toolCallId | toolCallId <- asPendingToolCalls st ]
       in st { asValidationErrors = asValidationErrors st ++ turnErrors ++ toolErrors }
 
     removeFirst :: Eq a => a -> [a] -> Maybe [a]
@@ -181,25 +184,39 @@ loadJournalFile fp = liftIO $ do
       content <- TIO.readFile fp
       pure (loadJournalText content)
 
+-- | Load and deserialize a JSONL journal file from the 'World' effect.
+loadJournalFileWorld :: (World :> es) => FilePath -> Eff es (Either Text [JournalEvent])
+loadJournalFileWorld fp = do
+  exists <- doesFileExist fp
+  if not exists
+    then pure (Left ("Journal file does not exist: " <> T.pack fp))
+    else do
+      content <- readFileText fp
+      pure (loadJournalText content)
+
 -- | Restore past session journal events from a JSONL file via IO.
+-- Fails closed (throws an IO exception) if the journal file is corrupted.
+-- Returns empty list if the journal file does not exist yet.
 resumeSession :: (IOE :> es) => FilePath -> Eff es [JournalEvent]
 resumeSession fp = do
   res <- loadJournalFile fp
   case res of
-    Left _ -> pure []
+    Left err
+      | "Journal file does not exist" `T.isInfixOf` err -> pure []
+      | otherwise -> liftIO $ IO.ioError $ IO.userError ("Failed to resume corrupted session from " ++ fp ++ ": " ++ T.unpack err)
     Right evs -> pure evs
 
 -- | Restore past session journal events using the 'World' effect.
+-- Fails closed (throws an IO exception) if the journal file is corrupted.
+-- Returns empty list if the journal file does not exist yet.
 resumeSessionWorld :: (World :> es) => FilePath -> Eff es [JournalEvent]
 resumeSessionWorld fp = do
-  exists <- doesFileExist fp
-  if not exists
-    then pure []
-    else do
-      content <- readFileText fp
-      case loadJournalText content of
-        Left _ -> pure []
-        Right evs -> pure evs
+  res <- loadJournalFileWorld fp
+  case res of
+    Left err
+      | "Journal file does not exist" `T.isInfixOf` err -> pure []
+      | otherwise -> Exception.throw (IO.userError ("Failed to resume corrupted session from " ++ fp ++ ": " ++ T.unpack err))
+    Right evs -> pure evs
 
 -- | Reconstruct a conversational 'ChatMessage' history from a stream of 'JournalEvent's.
 reconstructChatHistory :: [JournalEvent] -> [ChatMessage]
@@ -209,11 +226,11 @@ reconstructChatHistory = foldl' step []
     step acc = \case
       UserMsg content ->
         acc ++ [CoreTypes.UserMsg content]
-      ModelTurn content ->
-        acc ++ [CoreTypes.AssistantMsg content []]
-      ToolCompleted toolName result ->
+      ModelTurn content calls ->
+        acc ++ [CoreTypes.AssistantMsg content calls]
+      ToolCompleted toolCallId result ->
         let renderedResult = case result of
               Left err -> "Error: " <> err
               Right val -> TE.decodeUtf8 (LBS.toStrict (Aeson.encode val))
-        in acc ++ [CoreTypes.ToolMsg toolName renderedResult]
+        in acc ++ [CoreTypes.ToolMsg toolCallId renderedResult]
       _ -> acc

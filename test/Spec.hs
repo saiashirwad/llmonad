@@ -22,6 +22,7 @@ import qualified LLMonad.THSpec
 import qualified LLMonad.CodingToolsSpec
 import qualified LLMonad.CodingToolsAdversarialSpec
 import qualified LLMonad.JournalSpec
+import qualified LLMonad.ReplaySpec
 import qualified LLMonad.SubagentSpec
 import qualified LLMonad.TUISpec
 import qualified LLMonad.TUIAdversarialSpec
@@ -38,6 +39,7 @@ import qualified LLMonad.Batch3ChallengerStressSpec
 import qualified LLMonad.Batch4AdversarialSpec
 import qualified LLMonad.Batch4ChallengerSpec
 import qualified LLMonad.Batch4ChallengerStressSpec
+import qualified LLMonad.Batch5AdversarialSpec
 import Test.Hspec
 
 main :: IO ()
@@ -62,6 +64,7 @@ main = hspec $ do
   describe "World Effect & Sandboxing (R1)" LLMonad.WorldSpec.spec
   describe "World Effect Adversarial Stress Tests (R1)" LLMonad.WorldAdversarialSpec.spec
   describe "Journal Effect & Persistence (R2)" LLMonad.JournalSpec.spec
+  describe "Journal Replay & Deserialization Fidelity (Batch 5 / R5)" LLMonad.ReplaySpec.spec
   describe "Standard Coding Tools (R3)" LLMonad.CodingToolsSpec.spec
   describe "Subagent Delegation (R3)" LLMonad.SubagentSpec.spec
   describe "Coding Tools & Subagents Adversarial Suite (M3)" LLMonad.CodingToolsAdversarialSpec.spec
@@ -78,3 +81,4 @@ main = hspec $ do
   describe "Batch 4 Adversarial Suite" LLMonad.Batch4AdversarialSpec.spec
   describe "Batch 4 Challenger Suite" LLMonad.Batch4ChallengerSpec.spec
   describe "Batch 4 Challenger Stress Suite" LLMonad.Batch4ChallengerStressSpec.spec
+  describe "Batch 5 Adversarial & Fidelity Suite" LLMonad.Batch5AdversarialSpec.spec
