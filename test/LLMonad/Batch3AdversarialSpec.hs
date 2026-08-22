@@ -8,31 +8,20 @@ module LLMonad.Batch3AdversarialSpec (spec) where
 import Control.Exception (try)
 import Data.Aeson
   ( FromJSON (..)
-  , ToJSON (..)
   , Value (..)
-  , eitherDecode'
-  , encode
   , object
   , (.=)
   )
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
-import Data.IORef
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Effectful
 import GHC.Generics (Generic)
 import LLMonad
-import LLMonad.Internal.Extract (extractJSON, decodeViaJSON)
-import LLMonad.Providers.Anthropic
-  ( AntStreamState
-  , finalizeAnthropicStream
-  , handleAnthropicEvent
-  , initialAntStreamState
-  , parseMessagesResponse
-  )
+import LLMonad.Internal.Extract (extractJSON)
 import Test.Hspec
 
 -- | Types for testing fail-closed tool decoding
@@ -136,7 +125,9 @@ spec = do
       toolMsgIndices `shouldSatisfy` (not . null)
       warnMsgIndices `shouldSatisfy` (not . null)
       -- The first warning must occur AFTER the first tool message
-      head warnMsgIndices `shouldSatisfy` (> head toolMsgIndices)
+      case (warnMsgIndices, toolMsgIndices) of
+        (w:_, t:_) -> w `shouldSatisfy` (> t)
+        _ -> expectationFailure "Expected warning and tool messages"
 
     it "guarantees all parallel ToolMsgs precede cycle warning UserMsg in runAgentWith" $ do
       let parallelCalls =
@@ -158,7 +149,9 @@ spec = do
       length toolMsgIndices `shouldBe` 4 -- 2 calls in round 1, 2 in round 2
       length warnMsgIndices `shouldBe` 1
       -- Warning must be placed after the first round of tool calls (indices 0 and 1 tool msgs)
-      head warnMsgIndices `shouldSatisfy` (> (toolMsgIndices !! 3))
+      case (warnMsgIndices, toolMsgIndices) of
+        (w:_, _: _: _: t3:_) -> w `shouldSatisfy` (> t3)
+        _ -> expectationFailure "Expected warning and 4 tool messages"
 
     it "runAgent structured loop records tool results before cycle warnings" $ do
       let repeatedCall = Right (toolResp [ToolCall "c1" "point_tool" (object ["px" .= (3 :: Int), "py" .= (4 :: Int)])])
@@ -174,7 +167,9 @@ spec = do
       let toolMsgIndices = [ i | (i, ToolMsg _ _) <- msgs ]
       let warnMsgIndices = [ i | (i, UserMsg t) <- msgs, "Repeated identical tool call" `T.isInfixOf` t ]
       length warnMsgIndices `shouldBe` 1
-      head warnMsgIndices `shouldSatisfy` (> head toolMsgIndices)
+      case (warnMsgIndices, toolMsgIndices) of
+        (w:_, t:_) -> w `shouldSatisfy` (> t)
+        _ -> expectationFailure "Expected warning and tool messages"
 
   describe "Batch 3 Adversarial Suite: Anthropic Synthetic Schema Tool Disentanglement" $ do
     it "parseMessagesResponse excludes synthetic schema tool from crspToolCalls" $ do

@@ -5,10 +5,8 @@
 
 module LLMonad.Batch3ChallengerSpec (spec) where
 
-import Control.Exception (try)
 import Data.Aeson
   ( FromJSON (..)
-  , ToJSON (..)
   , Value (..)
   , object
   , (.=)
@@ -24,12 +22,6 @@ import Effectful
 import GHC.Generics (Generic)
 import LLMonad
 import LLMonad.Internal.Extract (extractJSON, decodeViaJSON)
-import LLMonad.Providers.Anthropic
-  ( finalizeAnthropicStream
-  , handleAnthropicEvent
-  , initialAntStreamState
-  , parseMessagesResponse
-  )
 import Test.Hspec
 
 -- Types for rigorous fail-closed validation
@@ -285,10 +277,9 @@ spec = do
       length warnMsgs `shouldBe` 1
 
       let round2ToolIndices = map fst (drop 3 toolMsgs)
-          warnIdx = fst (head warnMsgs)
-
-      -- Every tool message in round 2 must precede the warning user message
-      all (< warnIdx) round2ToolIndices `shouldBe` True
+      case warnMsgs of
+        ((warnIdx, _) : _) -> all (< warnIdx) round2ToolIndices `shouldBe` True
+        [] -> expectationFailure "Expected warning user message"
 
     it "ensures ToolMsg precedes cycle warning in runAgentStructured multi-round flow" $ do
       let callVal = object ["name" .= ("StructuredWorker" :: Text), "age" .= (30 :: Int), "isMember" .= True, "tags" .= ([] :: [Text])]
@@ -310,10 +301,9 @@ spec = do
       length toolMsgs `shouldBe` 2
       length warnMsgs `shouldBe` 1
 
-      let toolIdx2 = fst (toolMsgs !! 1)
-          warnIdx = fst (head warnMsgs)
-
-      toolIdx2 `shouldSatisfy` (< warnIdx)
+      case (toolMsgs, warnMsgs) of
+        ((_, _): (toolIdx2, _): _, (warnIdx, _): _) -> toolIdx2 `shouldSatisfy` (< warnIdx)
+        _ -> expectationFailure "Expected 2 tool messages and 1 warning message"
 
   describe "Batch 3 Challenger Suite: Delimiter-Stack JSON Extraction Stress Tests" $ do
     it "handles arbitrary nested structures: objects in arrays in objects in arrays" $ do
@@ -407,11 +397,12 @@ spec = do
       let raw =
             "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_user_1\",\"name\":\"person_tool\",\"input\":{\"name\":\"Sam\",\"age\":28,\"isMember\":true,\"tags\":[]}}],\"stop_reason\":\"tool_use\"}"
       case parseMessagesResponse (lbs raw) of
-        Right resp -> do
-          length (crspToolCalls resp) `shouldBe` 1
-          toolCallName (head (crspToolCalls resp)) `shouldBe` "person_tool"
-          crspStructuredPayload resp `shouldBe` Nothing
-          crspFinishReason resp `shouldBe` FrToolUse
+        Right resp -> case crspToolCalls resp of
+          [tc] -> do
+            toolCallName tc `shouldBe` "person_tool"
+            crspStructuredPayload resp `shouldBe` Nothing
+            crspFinishReason resp `shouldBe` FrToolUse
+          otherCalls -> expectationFailure ("Expected 1 tool call, got: " <> show otherCalls)
         Left e -> expectationFailure (show e)
 
     it "handles streaming synthetic tool events cleanly" $ do

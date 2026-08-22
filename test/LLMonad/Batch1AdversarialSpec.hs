@@ -4,39 +4,32 @@
 module LLMonad.Batch1AdversarialSpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay)
-import Control.Exception (AsyncException (..), SomeAsyncException (..), throwIO, try)
+import Control.Exception (AsyncException (..), throwIO, try)
 import Control.Monad (forM_)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BC
-import qualified Data.ByteString.Lazy as LBS
-import Data.Int (Int64)
 import Data.List (foldl')
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import LLMonad.Error (LLMError (..))
 import LLMonad.Internal.Http
-  ( defaultTimeoutMicros
-  , maxResponseBodyBytes
+  ( maxResponseBodyBytes
   , parseRetryAfter
   , timeoutFor
   , trySync
   )
 import LLMonad.Internal.SSE
-  ( SSEParser
-  , finishSSE
+  ( finishSSE
   , newSSEParser
   , stepSSE
   )
 import LLMonad.Providers.Anthropic
-  ( AntStreamState (..)
-  , finalizeAnthropicStream
+  ( finalizeAnthropicStream
   , handleAnthropicEvent
   , initialAntStreamState
   )
 import LLMonad.Providers.OpenAICompatible
-  ( OAIStreamState (..)
-  , finalizeOAIStream
+  ( finalizeOAIStream
   , handleOpenAIChunk
   , initialOAIStreamState
   )

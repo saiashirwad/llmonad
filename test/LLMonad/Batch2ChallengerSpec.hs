@@ -14,22 +14,16 @@
 module LLMonad.Batch2ChallengerSpec (spec) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.Async (Async, mapConcurrently, wait)
+import Control.Concurrent.Async (wait)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (SomeException)
-import Control.Monad (forM, forM_, replicateM, replicateM_)
-import Data.Aeson (FromJSON, ToJSON (..), Object, object, toJSON, (.=))
+import Control.Monad (forM, forM_, replicateM)
+import Data.Aeson (FromJSON, ToJSON (..), object, toJSON)
 import Data.IORef
-import Data.List (isInfixOf)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful
 import GHC.Generics (Generic)
 import LLMonad
-import LLMonad.Middleware.Cache
-import LLMonad.Tools.Coding (standardCodingTools)
 import Test.Hspec
 
 data CalcArgs = CalcArgs
@@ -125,7 +119,7 @@ spec = describe "Batch 2 Challenger Adversarial Suite" $ do
             [ Right (toolResp [ToolCall "c2" "calc" (toJSON (CalcArgs 20))])
             , Right (textResp "Beta Finished")
             ]
-          calcTool = toolSync "calc" "Square" (\(args :: CalcArgs) -> ("Squared" :: Text))
+          calcTool = toolSync "calc" "Square" (\(_args :: CalcArgs) -> ("Squared" :: Text))
 
       let runConcurrent = do
             a1 <- runSubagentAsync (SubagentArgs "UniqueTaskAlpha" Nothing (Just 3) Nothing Nothing) [calcTool]
@@ -201,13 +195,13 @@ spec = describe "Batch 2 Challenger Adversarial Suite" $ do
     it "Discriminates cache entries across diverse models for identical prompts" $ do
       cacheStore <- newInMemoryCache
       let models = [Model "gpt-4o", Model "claude-3-5-sonnet", Model "gemini-1.5-pro", Model "mistral-large"]
-      let prompt = "Explain monads in 3 words."
+      let promptText = "Explain monads in 3 words."
 
       -- First pass: Every model executes and caches its distinct response
       forM_ models $ \m -> do
         let modelText = "Response from " <> unModel m
             script = [Right (textResp modelText)]
-        (ans, reqs) <- runEff $ runLLMMock script (withCacheModel m cacheStore (generateText prompt))
+        (ans, reqs) <- runEff $ runLLMMock script (withCacheModel m cacheStore (generateText promptText))
         ans `shouldBe` modelText
         length reqs `shouldBe` 1
 
@@ -215,7 +209,7 @@ spec = describe "Batch 2 Challenger Adversarial Suite" $ do
       forM_ models $ \m -> do
         let expectedText = "Response from " <> unModel m
             emptyScript = []
-        (ans, reqs) <- runEff $ runLLMMock emptyScript (withCacheModel m cacheStore (generateText prompt))
+        (ans, reqs) <- runEff $ runLLMMock emptyScript (withCacheModel m cacheStore (generateText promptText))
         ans `shouldBe` expectedText
         length reqs `shouldBe` 0
 

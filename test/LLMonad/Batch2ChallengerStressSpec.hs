@@ -16,18 +16,14 @@ module LLMonad.Batch2ChallengerStressSpec (spec) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (SomeException)
 import Control.Monad (forM_, replicateM)
 import Data.Aeson (FromJSON, ToJSON (..), object)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Effectful
-import qualified Effectful.Exception as EE
 import GHC.Generics (Generic)
 import LLMonad hiding (prompt)
-import LLMonad.Middleware.Cache
-import LLMonad.Subagent
 import Test.Hspec
 
 data StressData = StressData

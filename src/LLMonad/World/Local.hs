@@ -44,9 +44,12 @@ import System.Exit (ExitCode (..))
 import System.FilePath
   ( dropTrailingPathSeparator
   , isAbsolute
+  , isDrive
   , makeRelative
   , normalise
+  , splitDirectories
   , takeDirectory
+  , takeFileName
   , (</>)
   )
 import System.IO (hClose, hFlush)
@@ -221,6 +224,58 @@ localWorldHandler canonicalRoot _ = \case
 
   RunCommand spec -> liftIO $ runLocalProcess spec canonicalRoot
 
+-- | Collapse '.' and '..' segments from a path string logically without filesystem access.
+-- Preserves leading drive / root prefix.
+collapseSegments :: FilePath -> FilePath
+collapseSegments p =
+  let isAbs = isAbsolute p
+      rawNorm = normalise p
+      segs = splitDirectories rawNorm
+      cleanSeg s = dropTrailingPathSeparator s
+      go [] acc = reverse acc
+      go (s : ss) acc
+        | sClean == "." || sClean == "" = go ss acc
+        | sClean == ".." = case acc of
+            [] -> if isAbs then go ss [] else go ss [".."]
+            (top : rest)
+              | top == ".." -> go ss (".." : top : rest)
+              | isDrive top -> if isAbs then go ss [top] else go ss (".." : top : rest)
+              | otherwise   -> go ss rest
+        | otherwise = go ss (sClean : acc)
+        where sClean = cleanSeg s
+      collapsed = go segs []
+   in case collapsed of
+        [] -> if isAbs then "/" else "."
+        (d : rest) -> foldl (</>) d rest
+
+-- | Resolve existing ancestor directory prefix on disk to follow symlinks safely,
+-- and append any non-existent tail segments.
+resolveExistingDiskPrefix :: FilePath -> IO FilePath
+resolveExistingDiskPrefix path = go path []
+  where
+    go cur remaining
+      | isDrive cur = do
+          canonDrive <- canonicalizePath cur
+          pure (foldl (</>) (cleanRoot canonDrive) remaining)
+      | otherwise = do
+          exists <- doesDirectoryExist cur
+          if exists
+            then do
+              canonCur <- canonicalizePath cur
+              pure (foldl (</>) (cleanRoot canonCur) remaining)
+            else do
+              fileExists <- doesFileExist cur
+              if fileExists
+                then do
+                  canonCur <- canonicalizePath cur
+                  pure (foldl (</>) (cleanRoot canonCur) remaining)
+                else
+                  let parent = takeDirectory cur
+                      base = takeFileName cur
+                   in if parent == cur
+                        then pure (foldl (</>) cur remaining)
+                        else go parent (base : remaining)
+
 -- | Resolve relative or absolute path against workspace root with strict containment validation.
 -- Throws 'WorldPathOutsideWorkspace' when target path escapes the workspace root boundary.
 resolveSafeLocalPath :: FilePath -> FilePath -> IO FilePath
@@ -228,18 +283,22 @@ resolveSafeLocalPath root fp = do
   canonicalRoot <- canonicalizePath root
   let cRoot = cleanRoot canonicalRoot
   let raw = if isAbsolute fp
-              then normalise fp
-              else normalise (cRoot </> fp)
-  canon <- canonicalizePath raw
-  if isInsideRoot cRoot canon
-    then pure canon
-    else E.throwIO (WorldPathOutsideWorkspace fp cRoot)
+              then fp
+              else cRoot </> fp
+  let logicalTarget = cleanRoot (collapseSegments raw)
+  if not (isInsideRoot cRoot logicalTarget)
+    then E.throwIO (WorldPathOutsideWorkspace fp cRoot)
+    else do
+      resolvedDiskPath <- resolveExistingDiskPrefix logicalTarget
+      if isInsideRoot cRoot resolvedDiskPath
+        then pure resolvedDiskPath
+        else E.throwIO (WorldPathOutsideWorkspace fp cRoot)
 
 -- | Check if target path lies strictly inside or equals workspace root.
 isInsideRoot :: FilePath -> FilePath -> Bool
 isInsideRoot canonRoot canonTarget =
-  let normRoot = normalise canonRoot
-      normTarget = normalise canonTarget
+  let normRoot = cleanRoot canonRoot
+      normTarget = cleanRoot canonTarget
    in normRoot == "/" || normRoot == normTarget
       || (normRoot `isPrefixOf` normTarget
           && case drop (length normRoot) normTarget of
@@ -254,9 +313,10 @@ cleanRoot r =
 
 -- | Resolve relative or absolute path against workspace root.
 resolveLocalPath :: FilePath -> FilePath -> FilePath
-resolveLocalPath root fp
-  | isAbsolute fp = normalise fp
-  | otherwise     = normalise (root </> fp)
+resolveLocalPath root fp =
+  let cRoot = cleanRoot root
+      raw = if isAbsolute fp then fp else cRoot </> fp
+   in cleanRoot (collapseSegments raw)
 
 -- | Execute an external process with environment, working directory, and timeout guards.
 runLocalProcess :: CommandSpec -> FilePath -> IO ProcessResult

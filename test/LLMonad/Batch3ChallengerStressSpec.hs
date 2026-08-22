@@ -12,7 +12,7 @@
 -- 3. Transactional History Rollback on Structured Loop Failures (CORE-001, CORE-002, CORE-029)
 module LLMonad.Batch3ChallengerStressSpec (spec) where
 
-import Control.Exception (SomeException, throwIO, try)
+import Control.Exception (SomeException, try)
 import Data.Aeson
   ( FromJSON (..)
   , ToJSON (..)
@@ -32,15 +32,6 @@ import Effectful
 import qualified Effectful.Exception as EE
 import GHC.Generics (Generic)
 import LLMonad
-import LLMonad.Providers.Anthropic
-  ( AnthropicConfig
-  , defaultAnthropicConfig
-  , buildMessagesBody
-  , parseMessagesResponse
-  , initialAntStreamState
-  , handleAnthropicEvent
-  , finalizeAnthropicStream
-  )
 import Test.Hspec
 
 -- | Target structured output record
@@ -194,7 +185,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
 
       -- Verify conversation history transcript ordering:
       -- UserMsg -> AssistantMsg (c1) -> ToolMsg (30) -> AssistantMsg (c2) -> ToolMsg (60) -> AssistantMsg (c3) -> ToolMsg ("value_for_key_60") -> AssistantMsg (finalObj)
-      let msgTypes = map (\case UserMsg _ -> "user"; AssistantMsg _ _ -> "assistant"; ToolMsg _ _ -> "tool"; SystemMsg _ -> "system") hist
+      let msgTypes = map (\case UserMsg _ -> "user" :: Text; AssistantMsg _ _ -> "assistant"; ToolMsg _ _ -> "tool"; SystemMsg _ -> "system") hist
       msgTypes `shouldBe` ["user", "assistant", "tool", "assistant", "tool", "assistant", "tool", "assistant"]
 
     it "handles parallel tool execution in multi-turn structured workflow" $ do

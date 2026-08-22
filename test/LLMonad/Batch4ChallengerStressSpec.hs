@@ -14,21 +14,10 @@ module LLMonad.Batch4ChallengerStressSpec (spec) where
 
 import Control.Concurrent.Async (forConcurrently_)
 import Control.Monad (forM_)
-import Data.Aeson (Result (..), decode, encode, fromJSON, toJSON)
-import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import Effectful
 import LLMonad
-import LLMonad.Tools.Coding
-import LLMonad.World
-import LLMonad.World.Local
-import LLMonad.World.Memory
-import LLMonad.World.Types
-import qualified System.Directory as SD
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
 import Test.Hspec
@@ -130,8 +119,8 @@ spec = describe "Batch 4 Empirical Challenger Stress Suite" $ do
           res <- runEff $ runWorldLocal tmpDir (runCommand specSleep)
           prTimedOut res `shouldBe` True
           prExitCode res `shouldBe` (-1)
-        (exitCode, psOut, _) <- readProcessWithExitCode "ps" ["-ax", "-o", "stat,command"] ""
-        exitCode `shouldBe` ExitSuccess
+        (psExitCode, psOut, _) <- readProcessWithExitCode "ps" ["-ax", "-o", "stat,command"] ""
+        psExitCode `shouldBe` ExitSuccess
         let defuncts = filter (\l -> "defunct" `T.isInfixOf` T.pack l || " Z " `T.isInfixOf` (" " <> T.pack l <> " ")) (lines psOut)
         let relevantDefuncts = filter (\l -> "sleep" `T.isInfixOf` T.pack l) defuncts
         relevantDefuncts `shouldBe` []

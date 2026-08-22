@@ -9,14 +9,12 @@
 module LLMonad.Batch4ChallengerSpec (spec) where
 
 import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful
 import LLMonad.Tools.Coding
 import LLMonad.World
 import LLMonad.World.Local
 import LLMonad.World.Memory
-import LLMonad.World.Types
 import qualified System.Directory as SD
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)

@@ -15,11 +15,9 @@
 module LLMonad.Batch2AdversarialSpec (spec) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.Async (wait)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_, replicateM, replicateM_)
-import Data.Aeson (FromJSON, ToJSON (..), Object, object, toJSON, (.=))
-import Data.IORef
+import Data.Aeson (FromJSON, ToJSON (..), object, toJSON, (.=))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful
@@ -233,15 +231,15 @@ spec = describe "Batch 2 Adversarial Suite: State, Concurrency & Retry Safety" $
       cacheStore <- newInMemoryCache
       let script1 = [Right (textResp "Model A Answer")]
           script2 = [Right (textResp "Model B Answer")]
-          prompt = "What is the capital of France?"
+          promptText = "What is the capital of France?"
 
       -- Execute request with Model A
-      (r1, reqs1) <- runEff $ runLLMMock script1 (withCacheModel (Model "model-a") cacheStore (generateText prompt))
+      (r1, reqs1) <- runEff $ runLLMMock script1 (withCacheModel (Model "model-a") cacheStore (generateText promptText))
       r1 `shouldBe` "Model A Answer"
       length reqs1 `shouldBe` 1
 
       -- Execute identical prompt with Model B - must MISS cache and hit backend
-      (r2, reqs2) <- runEff $ runLLMMock script2 (withCacheModel (Model "model-b") cacheStore (generateText prompt))
+      (r2, reqs2) <- runEff $ runLLMMock script2 (withCacheModel (Model "model-b") cacheStore (generateText promptText))
       r2 `shouldBe` "Model B Answer"
       length reqs2 `shouldBe` 1
 

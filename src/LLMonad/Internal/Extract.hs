@@ -48,24 +48,61 @@ stripFences t0 =
                       then T.strip val
                       else inner
 
--- | Parse the first balanced JSON value found in the text.
+-- | Parse the first valid JSON value found in the text.
 --
--- Strategy: try the whole (fence-stripped) text first; then scan for the
--- first @{@, @[@, or @"@ and take the balanced span; finally scan for primitives
--- if the text does not contain unclosed structural delimiters.
+-- Strategy:
+-- 1. Try whole fence-stripped text first.
+-- 2. Scan and try markdown code blocks (prioritizing ```json ... ``` blocks).
+-- 3. Scan all balanced candidate blocks (delimited by '{', '[', '"') in the text.
+-- 4. Try primitive literals (true, false, null, numbers).
+-- 5. If no candidate decodes and structural delimiters are present, return an error.
 extractJSON :: Text -> Either String Value
 extractJSON input =
   let stripped = stripFences input
       direct = eitherDecode' (LBS.fromStrict (encodeUtf8 stripped))
    in case direct of
         Right v -> Right v
-        Left _ -> case scanBalanced stripped of
-          Just candidate -> eitherDecode' (LBS.fromStrict (encodeUtf8 candidate))
-          Nothing
-            | hasStructuralDelimiters stripped -> Left "unbalanced or truncated JSON in output"
-            | otherwise -> case scanPrimitive stripped of
-                Just candidate -> eitherDecode' (LBS.fromStrict (encodeUtf8 candidate))
-                Nothing -> Left "no JSON value found in output"
+        Left _ ->
+          let (jsonFences, otherFences) = extractFencedBlocks input
+              fencedCandidates = jsonFences ++ otherFences
+              balancedCandidates = scanStructuralBalanced stripped ++ scanStructuralBalanced input
+              quotedCandidates
+                | hasStructuralDelimiters stripped = []
+                | otherwise = scanQuotedStrings stripped
+              allCandidates = fencedCandidates ++ balancedCandidates ++ quotedCandidates
+              decodedCandidates =
+                [ v
+                | cand <- allCandidates
+                , Right v <- [eitherDecode' (LBS.fromStrict (encodeUtf8 (T.strip cand)))]
+                ]
+           in case decodedCandidates of
+                (v : _) -> Right v
+                []
+                  | hasStructuralDelimiters stripped -> Left "unbalanced or truncated JSON in output"
+                  | otherwise -> case scanPrimitive stripped of
+                      Just primitiveCand -> eitherDecode' (LBS.fromStrict (encodeUtf8 primitiveCand))
+                      Nothing -> Left "no JSON value found in output"
+
+-- | Extract fenced code blocks from text, partitioned into (jsonBlocks, otherBlocks).
+extractFencedBlocks :: Text -> ([Text], [Text])
+extractFencedBlocks t = go (T.lines t) [] []
+  where
+    go [] jsonAcc otherAcc = (reverse jsonAcc, reverse otherAcc)
+    go (l : ls) jsonAcc otherAcc
+      | "```" `T.isPrefixOf` T.stripStart l =
+          let restTag = T.strip (T.drop 3 (T.stripStart l))
+              (tag, _) = T.span isAlphaNum restTag
+              lowerTag = T.toLower tag
+              isJsonTag = lowerTag `elem` ["json", "json5", "javascript", "js"]
+              (blockLines, remaining) = break (\line -> "```" `T.isPrefixOf` T.stripStart line) ls
+              content = T.unlines blockLines
+              nextLs = case remaining of
+                [] -> []
+                (_ : rest) -> rest
+           in if isJsonTag
+                then go nextLs (content : jsonAcc) otherAcc
+                else go nextLs jsonAcc (content : otherAcc)
+      | otherwise = go ls jsonAcc otherAcc
 
 -- | Check if the text contains structural JSON delimiters '{', '}', '[', ']'.
 hasStructuralDelimiters :: Text -> Bool
@@ -79,14 +116,26 @@ decodeViaJSON t = extractJSON t >>= parseEither parseJSON
 -- Balanced-span scanner
 --------------------------------------------------------------------------------
 
--- Find the first top-level '{', '[', or '"' and return the balanced substring.
-scanBalanced :: Text -> Maybe Text
-scanBalanced t = go (T.unpack t)
+-- | Find all balanced '{...}' and '[...]' candidates in the text.
+scanStructuralBalanced :: Text -> [Text]
+scanStructuralBalanced t = go (T.unpack t)
   where
-    go [] = Nothing
+    go [] = []
     go (c : rest)
-      | c == '{' || c == '[' = takeBalanced c rest
-      | c == '"' = takeQuoted rest
+      | c == '{' || c == '[' = case takeBalanced c rest of
+          Just (candidate, remaining) -> candidate : go remaining
+          Nothing        -> []
+      | otherwise = go rest
+
+-- | Find quoted string literals in text when no structural delimiters exist.
+scanQuotedStrings :: Text -> [Text]
+scanQuotedStrings t = go (T.unpack t)
+  where
+    go [] = []
+    go (c : rest)
+      | c == '"' = case takeQuoted rest of
+          Just candidate -> candidate : go rest
+          Nothing        -> go rest
       | otherwise = go rest
 
 takeQuoted :: String -> Maybe Text
@@ -100,11 +149,11 @@ takeQuoted cs = walk False [] cs
       | otherwise = walk False (x : acc) xs
 
 -- Given an opening delimiter already consumed, consume until its match.
-takeBalanced :: Char -> String -> Maybe Text
+takeBalanced :: Char -> String -> Maybe (Text, String)
 takeBalanced open rest =
   let initialStack = [if open == '{' then '}' else ']']
       walk _ _ _ _ [] = Nothing
-      walk [] _ _ _ _ = Nothing
+      walk [] _ _ _ restStr = Just ([], restStr)
       walk stack@(expected : restStack) inStr esc acc (c : cs)
         | esc = walk stack True False (c : acc) cs
         | c == '\\' && inStr = walk stack True True (c : acc) cs
@@ -115,11 +164,13 @@ takeBalanced open rest =
         | c == '}' || c == ']' =
             if c == expected
               then if null restStack
-                     then Just (reverse (c : acc))
+                     then Just (reverse (c : acc), cs)
                      else walk restStack False False (c : acc) cs
               else Nothing
         | otherwise = walk stack False False (c : acc) cs
-   in fmap (T.cons open . T.pack) (walk initialStack False False [] rest)
+   in case walk initialStack False False [] rest of
+        Just (matched, remaining) -> Just (T.cons open (T.pack matched), remaining)
+        Nothing -> Nothing
 
 --------------------------------------------------------------------------------
 -- Primitive literal scanner

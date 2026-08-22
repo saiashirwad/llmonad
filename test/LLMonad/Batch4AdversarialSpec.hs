@@ -7,18 +7,12 @@
 -- Workspace Containment, Process Supervision Deadlocks & Coding Tool Limits.
 module LLMonad.Batch4AdversarialSpec (spec) where
 
-import Control.Exception (SomeException, catch)
-import qualified Data.Map.Strict as Map
-import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful
-import qualified Effectful.Exception as EE
 import LLMonad.Tools.Coding
 import LLMonad.World
 import LLMonad.World.Local
 import LLMonad.World.Memory
-import LLMonad.World.Types
-import qualified System.Directory as SD
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)
