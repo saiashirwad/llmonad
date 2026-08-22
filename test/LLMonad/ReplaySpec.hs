@@ -2,17 +2,14 @@
 
 module LLMonad.ReplaySpec (spec) where
 
-import Control.Monad (forM_)
-import Data.Aeson (eitherDecode, encode, object, (.=), Value)
+import Data.Aeson (eitherDecode, encode, object, (.=))
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Effectful
 import LLMonad.Journal
 import LLMonad.Journal.File
-import LLMonad.Journal.Memory
 import LLMonad.Providers.Anthropic (encodeAnthropicMessages)
 import LLMonad.Providers.OpenAICompatible (buildChatCompletionsBody, defaultOpenAICompatConfig, StructuredTier (..))
 import LLMonad.Types hiding (UserMsg)

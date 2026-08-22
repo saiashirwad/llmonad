@@ -49,7 +49,7 @@ import System.FilePath
   , takeDirectory
   , (</>)
   )
-import System.IO (Handle, hClose, hFlush)
+import System.IO (hClose, hFlush)
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)

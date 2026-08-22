@@ -3,21 +3,15 @@
 module LLMonad.Batch5AdversarialSpec (spec) where
 
 import Control.Monad (forM_)
-import Data.Aeson (eitherDecode, encode, object, (.=), Value)
-import qualified Data.ByteString.Lazy as LBS
+import Data.Aeson (object, (.=))
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Effectful
 import LLMonad.Journal
 import LLMonad.Journal.File
-import LLMonad.Journal.Memory
-import LLMonad.Providers.Anthropic (encodeAnthropicMessages)
-import LLMonad.Providers.OpenAICompatible (buildChatCompletionsBody, defaultOpenAICompatConfig, StructuredTier (..))
-import LLMonad.Types hiding (UserMsg)
+import LLMonad.Journal.Memory (runJournalMemory)
 import qualified LLMonad.Types as CoreTypes
-import LLMonad.World.Memory (initMemoryWorld, runWorldMemory)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 

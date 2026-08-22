@@ -3,23 +3,20 @@
 module LLMonad.Batch5ChallengerSpec (spec) where
 
 import Control.Monad (forM_)
-import Data.Aeson (Value (..), eitherDecode, encode, object, (.=))
+import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.Text.IO as TIO
 import qualified Data.Vector as V
 import Effectful
 import LLMonad.Journal
 import LLMonad.Journal.File
-import LLMonad.Journal.Memory
+import LLMonad.Journal.Memory (runJournalMemory)
 import LLMonad.Providers.Anthropic (encodeAnthropicMessages)
 import LLMonad.Providers.OpenAICompatible (StructuredTier (..), buildChatCompletionsBody, defaultOpenAICompatConfig)
 import LLMonad.Types hiding (UserMsg)
 import qualified LLMonad.Types as CoreTypes
-import LLMonad.World.Memory (initMemoryWorld, runWorldMemory)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 

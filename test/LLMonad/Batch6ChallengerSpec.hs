@@ -11,8 +11,6 @@ import qualified Data.Text as T
 import Effectful (runEff)
 import qualified Graphics.Vty as Vty
 import LLMonad
-import LLMonad.Journal.File (runJournalFile)
-import LLMonad.Journal.Replay (loadJournalFile)
 import qualified LLMonad.Journal.Types as J
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec

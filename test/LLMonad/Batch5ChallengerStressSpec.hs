@@ -8,28 +8,17 @@
 -- and High-Throughput O(N) Event Logging.
 module LLMonad.Batch5ChallengerStressSpec (spec) where
 
-import Control.Exception (IOException)
 import Control.Monad (forM_)
-import Data.Aeson (Value, eitherDecode, encode, object, (.=))
-import qualified Data.ByteString as BS
+import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Effectful
 import LLMonad.Journal
 import LLMonad.Journal.File
-import LLMonad.Journal.Memory
-import LLMonad.Journal.Replay
 import LLMonad.Providers.Anthropic (encodeAnthropicMessages)
-import LLMonad.Providers.OpenAICompatible
-  ( StructuredTier (..)
-  , buildChatCompletionsBody
-  , defaultOpenAICompatConfig
-  )
-import LLMonad.Types hiding (UserMsg)
 import qualified LLMonad.Types as CoreTypes
 import LLMonad.World.Memory (initMemoryWorld, runWorldMemory)
 import System.FilePath ((</>))

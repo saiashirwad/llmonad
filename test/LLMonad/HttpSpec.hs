@@ -12,7 +12,7 @@ import LLMonad.Internal.Http
   , timeoutFor
   , trySync
   )
-import Network.HTTP.Client (ResponseTimeout, responseTimeoutMicro)
+import Network.HTTP.Client (responseTimeoutMicro)
 import Test.Hspec
 
 spec :: Spec
