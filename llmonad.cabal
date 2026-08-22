@@ -119,6 +119,7 @@ library
 executable llmonad
     import:           warnings
     main-is:          Main.hs
+    ghc-options:      -threaded -rtsopts
     build-depends:
         base >= 4.16 && < 5,
         llmonad,
@@ -134,6 +135,7 @@ executable llmonad
 executable llmonad-tui
     import:           warnings
     main-is:          TUI.hs
+    ghc-options:      -threaded -rtsopts
     build-depends:
         base >= 4.16 && < 5,
         llmonad,
@@ -200,6 +202,8 @@ test-suite llmonad-test
         LLMonad.Batch5AdversarialSpec
         LLMonad.Batch5ChallengerSpec
         LLMonad.Batch5ChallengerStressSpec
+        LLMonad.Batch6ChallengerSpec
+        LLMonad.Batch6ChallengerStressSpec
         LLMonad.Mock
     build-depends:
         base >= 4.16 && < 5,

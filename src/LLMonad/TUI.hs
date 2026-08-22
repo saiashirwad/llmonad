@@ -264,7 +264,8 @@ hydrateAppStateFromEvents events st
   | otherwise =
       let chatMsgs = reconstructChatHistory events
           auditSummary = replayAuditSummary events
-          (replayedLogs, replayedDiff) = foldl' processEvent ([], Nothing) events
+          (replayedTaggedLogs, replayedDiff) = foldl' processEvent ([], Nothing) events
+          replayedLogs = map snd replayedTaggedLogs
           metrics = AppMetrics
             { amPromptTokens     = rsPromptTokens auditSummary
             , amCompletionTokens = rsCompletionTokens auditSummary
@@ -286,31 +287,75 @@ hydrateAppStateFromEvents events st
         , appStatusMessage = statusMsg
         }
   where
-    processEvent (logs, mDiff) = \case
-      J.ToolInvoked _callId name args ->
+    processEvent (taggedLogs, mDiff) = \case
+      J.ToolInvoked callId name args ->
         let entry = ToolLogEntry
               { tleToolName  = name
               , tleArguments = args
               , tleResult    = Nothing
               , tleTimestamp = "replayed"
               }
-        in (logs ++ [entry], mDiff)
+        in (taggedLogs ++ [(callId, entry)], mDiff)
 
-      J.ToolCompleted _callId res ->
+      J.ToolCompleted callId res ->
         let newDiff = extractDiffFromToolResult res
-            updatedLogs = case reverse logs of
-              [] -> logs
-              (lastEntry : rest) ->
-                reverse (lastEntry { tleResult = Just res } : rest)
-            toolName = case reverse logs of
-              (e:_) -> Just (T.unpack (tleToolName e))
-              []    -> Nothing
+            (updatedLogs, mMatched) = updateLogByCallId callId res taggedLogs
+            matchedToolName = fmap (T.unpack . tleToolName) mMatched
             updatedDiff = case newDiff of
-              Just d  -> Just (VisualDiffState d toolName)
+              Just d  -> Just (VisualDiffState d matchedToolName)
               Nothing -> mDiff
         in (updatedLogs, updatedDiff)
 
-      _ -> (logs, mDiff)
+      _ -> (taggedLogs, mDiff)
+
+    updateLogByCallId callId res logs =
+      case matchUncompletedById callId logs of
+        Just (updated, matched) -> (updated, Just matched)
+        Nothing ->
+          case matchAnyById callId logs of
+            Just (updated, matched) -> (updated, Just matched)
+            Nothing ->
+              case matchFirstUncompleted logs of
+                Just (updated, matched) -> (updated, Just matched)
+                Nothing ->
+                  case matchLast logs of
+                    Just (updated, matched) -> (updated, Just matched)
+                    Nothing -> (logs, Nothing)
+      where
+        matchUncompletedById _ [] = Nothing
+        matchUncompletedById cid ((c, e) : rest)
+          | c == cid && tleResult e == Nothing =
+              let updated = e { tleResult = Just res }
+              in Just ((c, updated) : rest, updated)
+          | otherwise = case matchUncompletedById cid rest of
+              Just (rest', matched) -> Just ((c, e) : rest', matched)
+              Nothing -> Nothing
+
+        matchAnyById _ [] = Nothing
+        matchAnyById cid ((c, e) : rest)
+          | c == cid =
+              let updated = e { tleResult = Just res }
+              in Just ((c, updated) : rest, updated)
+          | otherwise = case matchAnyById cid rest of
+              Just (rest', matched) -> Just ((c, e) : rest', matched)
+              Nothing -> Nothing
+
+        matchFirstUncompleted [] = Nothing
+        matchFirstUncompleted ((c, e) : rest)
+          | tleResult e == Nothing =
+              let updated = e { tleResult = Just res }
+              in Just ((c, updated) : rest, updated)
+          | otherwise = case matchFirstUncompleted rest of
+              Just (rest', matched) -> Just ((c, e) : rest', matched)
+              Nothing -> Nothing
+
+        matchLast [] = Nothing
+        matchLast [(c, e)] =
+          let updated = e { tleResult = Just res }
+          in Just ([(c, updated)], updated)
+        matchLast ((c, e) : rest) = case matchLast rest of
+          Just (rest', matched) -> Just ((c, e) : rest', matched)
+          Nothing -> Nothing
 
 -- ============================================================================
 -- Pure Event Handlers
