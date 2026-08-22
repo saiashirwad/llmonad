@@ -21,27 +21,62 @@ import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 
--- | Accumulated parser state: bytes not yet consumed plus pending data lines.
-newtype SSEParser = SSEParser ByteString
-  deriving (Eq)
+-- | Accumulated parser state: bytes not yet consumed plus pending data lines in reverse order.
+data SSEParser = SSEParser !ByteString ![Text]
+  deriving (Eq, Show)
 
 -- | A fresh parser.
 newSSEParser :: SSEParser
-newSSEParser = SSEParser BS.empty
+newSSEParser = SSEParser BS.empty []
 
--- | Feed a chunk; get back completed event payloads (the joined @data:@@
+-- | Feed a chunk; get back completed event payloads (the joined @data:@
 -- lines of each dispatched event) and the new state.
 stepSSE :: SSEParser -> ByteString -> (SSEParser, [Text])
-stepSSE (SSEParser buf0) chunk =
+stepSSE (SSEParser buf0 pending0) chunk =
   let (completeLines, rest) = takeLines (buf0 <> chunk)
-   in (SSEParser rest, dispatch completeLines)
+      (pending', events) = processLines completeLines pending0 []
+   in (SSEParser rest pending', events)
+
+-- | Process complete lines into (newPendingData, emittedEvents)
+processLines :: [ByteString] -> [Text] -> [Text] -> ([Text], [Text])
+processLines [] pending accEvents = (pending, reverse accEvents)
+processLines (ln : rest) pending accEvents
+  | BS.null ln =
+      case reverse pending of
+        [] -> processLines rest [] accEvents
+        ds -> processLines rest [] (T.intercalate "\n" ds : accEvents)
+  | BS.head ln == 58 =
+      -- Comment line starting with ':'
+      processLines rest pending accEvents
+  | otherwise =
+      case breakColon ln of
+        Nothing ->
+          if ln == "data"
+            then processLines rest ("" : pending) accEvents
+            else processLines rest pending accEvents
+        Just (field, val)
+          | field == "data" ->
+              processLines rest (stripLeadingSpace val : pending) accEvents
+          | otherwise ->
+              -- event:, id:, retry: ignored
+              processLines rest pending accEvents
 
 -- | Flush at end of stream: emit a trailing event if the peer forgot the
--- final blank line.
+-- final blank line or has a partial line in the byte buffer.
 finishSSE :: SSEParser -> [Text]
-finishSSE (SSEParser buf)
-  | BS.null buf = []
-  | otherwise = dispatch [buf]
+finishSSE (SSEParser buf pending) =
+  let pendingWithBuf =
+        if BS.null buf
+          then pending
+          else case breakColon buf of
+            Nothing ->
+              if buf == "data" then "" : pending else pending
+            Just (field, val)
+              | field == "data" -> stripLeadingSpace val : pending
+              | otherwise -> pending
+   in case reverse pendingWithBuf of
+        [] -> []
+        ds -> [T.intercalate "\n" ds]
 
 -- Split off all complete newline-terminated lines; return them (without
 -- terminators) plus the remainder.
@@ -54,29 +89,6 @@ takeLines = go []
         let (ln, rest) = BS.splitAt i bs
          in go (stripCr ln : acc) (BS.drop 1 rest)
     stripCr l = if not (BS.null l) && BS.last l == 13 then BS.init l else l
-
--- Turn a list of raw lines into dispatched event payloads.
-dispatch :: [ByteString] -> [Text]
-dispatch lines0 = reverse (go lines0 [] [])
-  where
-    -- accEvents: finished payloads (reversed); accData: current data lines (reversed)
-    go [] curData accEvents =
-      case reverse curData of
-        [] -> accEvents
-        ds -> T.intercalate "\n" ds : accEvents
-    go (ln : rest) curData accEvents
-      | BS.null ln = flush rest curData accEvents
-      | BS.head ln == 58 = go rest curData accEvents -- ':' comment
-      | otherwise =
-          case breakColon ln of
-            Nothing -> go rest curData accEvents
-            Just (field, val)
-              | field == "data" -> go rest (stripLeadingSpace val : curData) accEvents
-              | otherwise -> go rest curData accEvents -- event:, id:, retry: ignored
-    flush rest curData accEvents =
-      case reverse curData of
-        [] -> go rest [] accEvents
-        ds -> go rest [] (T.intercalate "\n" ds : accEvents)
 
 breakColon :: ByteString -> Maybe (Text, Text)
 breakColon bs = case BS.elemIndex 58 bs of

@@ -162,6 +162,7 @@ test-suite llmonad-test
     other-modules:
         LLMonad.SchemaSpec
         LLMonad.SSESpec
+        LLMonad.HttpSpec
         LLMonad.ExtractSpec
         LLMonad.CoreSpec
         LLMonad.OpenAICompatSpec
@@ -203,6 +204,8 @@ test-suite llmonad-test
         process >= 1.6 && < 1.7,
         temporary >= 1.3 && < 1.4,
         async >= 2.2 && < 2.3,
+        http-client >= 0.7 && < 0.9,
+        case-insensitive >= 1.2 && < 1.3,
         brick >= 2.0 && < 3.0,
         vty >= 6.0 && < 7.0,
         hspec >= 2.10 && < 2.12,

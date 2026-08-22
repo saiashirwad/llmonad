@@ -58,7 +58,7 @@ import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IM
 import Data.List (foldl')
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
@@ -446,23 +446,28 @@ data OAIStreamState = OAIStreamState
   , osFinish :: Maybe FinishReason
   , osUsage :: Maybe Usage
   , osError :: Maybe LLMError
+  , osDoneSeen :: Bool
   }
+  deriving (Eq, Show)
 
 initialOAIStreamState :: OAIStreamState
-initialOAIStreamState = OAIStreamState mempty IM.empty Nothing Nothing Nothing
+initialOAIStreamState = OAIStreamState mempty IM.empty Nothing Nothing Nothing False
 
 -- | Fold one SSE payload (a JSON chunk or @[DONE]@) into the state,
 -- emitting any new text as 'SEText' events.
 handleOpenAIChunk :: OAIStreamState -> Text -> (OAIStreamState, [StreamEvent])
 handleOpenAIChunk st payload
-  | T.strip payload == "[DONE]" = (st, [])
+  | T.strip payload == "[DONE]" = (st {osDoneSeen = True}, [])
   | otherwise = case A.eitherDecode' (LBS.fromStrict (encodeUtf8 payload)) of
       Left _ -> (st, []) -- ignore keep-alives / non-JSON noise
       Right chunk -> case oaiChunkError chunk of
         Just e -> (st {osError = Just (ApiError 500 (renderCompact e))}, [])
         Nothing ->
           let st' = foldl' applyChoice st (oaiChunkChoices chunk)
-           in (st', deltas st st')
+              st'' = case oaiChunkUsage chunk of
+                Just u -> st' {osUsage = Just (Usage (fromMaybe 0 (oaiUsagePrompt u)) (fromMaybe 0 (oaiUsageCompletion u)))}
+                Nothing -> st'
+           in (st'', deltas st st'')
   where
     deltas before after =
       let oldLen = T.length (osText before)
@@ -492,31 +497,35 @@ applyChoice st ch =
 finalizeOAIStream :: OAIStreamState -> Either LLMError CompletionResponse
 finalizeOAIStream st = case osError st of
   Just e -> Left e
-  Nothing ->
-    Right
-      CompletionResponse
-        { crspText = osText st
-        , crspToolCalls =
-            [ ToolCall
-                { toolCallId = fromMaybe (T.pack ('c' : show i)) mid
-                , toolCallName = fromMaybe "" mn
-                , toolCallArguments = parseArgsText ma
-                }
-            | (i, (mid, mn, ma)) <- IM.toAscList (osCalls st)
-            ]
-        , crspStructuredPayload = Nothing
-        , crspFinishReason = fromMaybe FrStop (osFinish st)
-        , crspUsage = osUsage st
-        }
+  Nothing
+    | not (osDoneSeen st) && isNothing (osFinish st) ->
+        Left (HttpError "Stream ended prematurely without [DONE] or finish_reason")
+    | otherwise ->
+        Right
+          CompletionResponse
+            { crspText = osText st
+            , crspToolCalls =
+                [ ToolCall
+                    { toolCallId = fromMaybe (T.pack ('c' : show i)) mid
+                    , toolCallName = fromMaybe "" mn
+                    , toolCallArguments = parseArgsText ma
+                    }
+                | (i, (mid, mn, ma)) <- IM.toAscList (osCalls st)
+                ]
+            , crspStructuredPayload = Nothing
+            , crspFinishReason = fromMaybe FrStop (osFinish st)
+            , crspUsage = osUsage st
+            }
 
 data OAIChunk = OAIChunk
   { oaiChunkChoices :: [OAIChunkChoice]
   , oaiChunkError :: Maybe Value
+  , oaiChunkUsage :: Maybe OAIUsage
   }
 
 instance A.FromJSON OAIChunk where
   parseJSON = withObject "chunk" $ \o ->
-    OAIChunk <$> o .:? "choices" .!= [] <*> o .:? "error"
+    OAIChunk <$> o .:? "choices" .!= [] <*> o .:? "error" <*> o .:? "usage"
 
 data OAIChunkChoice = OAIChunkChoice
   { oaiChoiceDelta :: Maybe OAIDelta

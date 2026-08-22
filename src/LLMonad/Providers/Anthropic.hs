@@ -36,13 +36,14 @@ import Data.Aeson
   )
 import qualified Data.Aeson as A
 import Data.Aeson.Key qualified as Key
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as A
 import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import qualified Data.IntMap.Strict as IM
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
@@ -334,10 +335,12 @@ data AntStreamState = AntStreamState
   , asInputTokens :: Int
   , asOutputTokens :: Int
   , asError :: Maybe LLMError
+  , asFinished :: Bool
   }
+  deriving (Eq, Show)
 
 initialAntStreamState :: AntStreamState
-initialAntStreamState = AntStreamState IM.empty (Just FrStop) 0 0 Nothing
+initialAntStreamState = AntStreamState IM.empty Nothing 0 0 Nothing False
 
 -- | Fold one SSE payload into the state, emitting new text deltas.
 handleAnthropicEvent :: AntStreamState -> Text -> (AntStreamState, [StreamEvent])
@@ -374,6 +377,8 @@ handleAnthropicEvent st payload = case A.eitherDecode' (LBS.fromStrict (encodeUt
           }
       , []
       )
+    Just "message_stop" ->
+      (st {asFinished = True}, [])
     Just "error" ->
       (st {asError = Just (ApiError 500 (renderCompact (antEvErrorBody ev)))}, [])
     _ -> (st, [])
@@ -392,28 +397,31 @@ handleAnthropicEvent st payload = case A.eitherDecode' (LBS.fromStrict (encodeUt
 finalizeAnthropicStream :: AntStreamState -> Either LLMError CompletionResponse
 finalizeAnthropicStream st = case asError st of
   Just e -> Left e
-  Nothing ->
-    let ordered = [b | (_, b) <- IM.toAscList (asBlocks st)]
-        texts = [t | AntTextAcc t <- ordered, not (T.null t)]
-        calls =
-          [ ToolCall
-              { toolCallId = fromMaybe "" mid
-              , toolCallName = fromMaybe "" mn
-              , toolCallArguments = fromMaybe Null (parseJsonText pj)
-              }
-          | AntToolAcc mid mn pj <- ordered
-          ]
-        structuredPayload = case [v | AntToolAcc _ _ pj <- ordered, Just v <- [parseJsonText pj]] of
-          (v : _) -> Just v
-          [] -> Nothing
-     in Right
-          CompletionResponse
-            { crspText = T.concat texts
-            , crspToolCalls = calls
-            , crspStructuredPayload = structuredPayload
-            , crspFinishReason = fromMaybe FrStop (asStop st)
-            , crspUsage = Just (Usage (asInputTokens st) (asOutputTokens st))
-            }
+  Nothing
+    | not (asFinished st) && isNothing (asStop st) ->
+        Left (HttpError "Stream ended prematurely without message_stop or stop_reason")
+    | otherwise ->
+        let ordered = [b | (_, b) <- IM.toAscList (asBlocks st)]
+            texts = [t | AntTextAcc t <- ordered, not (T.null t)]
+            calls =
+              [ ToolCall
+                  { toolCallId = fromMaybe "" mid
+                  , toolCallName = fromMaybe "" mn
+                  , toolCallArguments = fromMaybe Null (parseJsonText pj)
+                  }
+              | AntToolAcc mid mn pj <- ordered
+              ]
+            structuredPayload = case [v | AntToolAcc _ _ pj <- ordered, Just v <- [parseJsonText pj]] of
+              (v : _) -> Just v
+              [] -> Nothing
+         in Right
+              CompletionResponse
+                { crspText = T.concat texts
+                , crspToolCalls = calls
+                , crspStructuredPayload = structuredPayload
+                , crspFinishReason = fromMaybe FrStop (asStop st)
+                , crspUsage = Just (Usage (asInputTokens st) (asOutputTokens st))
+                }
   where
     parseJsonText "" = Nothing
     parseJsonText t = case extractJsonValue t of
@@ -500,12 +508,16 @@ streamWith ::
 streamWith cfg req cb = do
   stateRef <- newIORef initialAntStreamState
   parserRef <- newIORef newSSEParser
+  let baseBody = buildMessagesBody cfg req
+      body = case baseBody of
+        Object o -> Object (KM.insert "stream" (Bool True) o)
+        v -> v
   r <-
     postJSONStream
       (messagesUrl cfg)
       (authHeaders cfg ++ acExtraHeaders cfg)
       (acTimeoutSeconds cfg)
-      (buildMessagesBody cfg req)
+      body
       (onChunk stateRef parserRef)
   case r of
     Left e -> pure (Left e)

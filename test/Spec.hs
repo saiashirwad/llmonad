@@ -10,6 +10,7 @@ import qualified LLMonad.CurriedAPISpec
 import qualified LLMonad.E2ETier3Spec
 import qualified LLMonad.E2ETier4Spec
 import qualified LLMonad.ExtractSpec
+import qualified LLMonad.HttpSpec
 import qualified LLMonad.MockSpec
 import qualified LLMonad.OpenAICompatSpec
 import qualified LLMonad.PromptSpec
@@ -44,6 +45,7 @@ main = hspec $ do
   describe "OpenAICompatible Provider (F1.2)" LLMonad.OpenAICompatSpec.spec
   describe "Anthropic Provider (F1.2)" LLMonad.AnthropicSpec.spec
   describe "SSE Parser (F5.3)" LLMonad.SSESpec.spec
+  describe "HTTP Transport (F1.2, HTTP-001..008)" LLMonad.HttpSpec.spec
   describe "Tier 3: Pairwise Interactions" LLMonad.E2ETier3Spec.spec
   describe "Tier 4: Real-World Workloads" LLMonad.E2ETier4Spec.spec
   describe "Challenger Adversarial Stress Tests (M1)" LLMonad.ChallengerSpec.spec

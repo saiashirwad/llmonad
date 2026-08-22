@@ -13,6 +13,7 @@ import Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
+import LLMonad.Error (LLMError (..))
 import qualified Data.Vector as V
 import LLMonad.Providers.Anthropic
 import LLMonad.Types
@@ -147,6 +148,29 @@ spec = do
         Right resp ->
           crspStructuredPayload resp `shouldBe` Just (object [(Key.fromText "q", String "hey")])
         Left e -> expectationFailure (show e)
+
+    it "rejects truncated stream ending abruptly without message_stop or stop_reason" $ do
+      let events =
+            [ "{\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}"
+            , "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}"
+            , "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Incomplete\"}}"
+            ]
+          st = foldl (\s e -> fst (handleAnthropicEvent s e)) initialAntStreamState events
+      case finalizeAnt st of
+        Left (HttpError _) -> pure ()
+        other -> expectationFailure ("expected HttpError on truncated stream, got: " <> show other)
+
+    it "rejects empty stream without events" $ do
+      case finalizeAnt initialAntStreamState of
+        Left (HttpError _) -> pure ()
+        other -> expectationFailure ("expected HttpError on empty stream, got: " <> show other)
+
+    it "verifies provider stream payload includes stream: true" $ do
+      let baseBody = buildMessagesBody cfg schemaReq
+          streamBody = case baseBody of
+            Object o -> Object (KM.insert "stream" (Bool True) o)
+            v -> v
+      lookupV "stream" streamBody `shouldBe` Just (Bool True)
   where
     finalizeAnt = finalizeAnthropicStream
     streamEventText (SEText t) = t

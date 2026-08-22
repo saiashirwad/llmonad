@@ -6,9 +6,13 @@ module LLMonad.Internal.Http
   ( postJSON
   , postJSONStream
   , defaultTimeoutMicros
+  , maxResponseBodyBytes
+  , timeoutFor
+  , parseRetryAfter
+  , trySync
   ) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeAsyncException (..), SomeException, fromException, throwIO, try)
 import Data.Aeson (Value, encode)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -20,11 +24,11 @@ import Data.Text.Encoding.Error (lenientDecode)
 import LLMonad.Error (LLMError (..))
 import LLMonad.Internal.GlobalManager (globalManager)
 import Network.HTTP.Client
-  ( Request
+  ( BodyReader
+  , Request
   , RequestBody (RequestBodyLBS)
   , ResponseTimeout
   , brRead
-  , httpLbs
   , method
   , parseRequest
   , requestBody
@@ -43,8 +47,28 @@ import Network.HTTP.Types (Header, statusCode, statusIsSuccessful)
 defaultTimeoutMicros :: Int
 defaultTimeoutMicros = 300 * 1000 * 1000
 
+-- | Default response body size limit (10 MiB) to prevent unbounded memory growth.
+maxResponseBodyBytes :: Int
+maxResponseBodyBytes = 10 * 1024 * 1024
+
+-- | Run an IO action and catch only synchronous exceptions.
+-- Asynchronous exceptions (such as ThreadKilled or timeout cancellations)
+-- are immediately rethrown to preserve concurrency control.
+trySync :: IO a -> IO (Either SomeException a)
+trySync act = try act >>= \case
+  Left ex -> case fromException ex of
+    Just (SomeAsyncException _) -> throwIO ex
+    Nothing -> pure (Left ex)
+  Right a -> pure (Right a)
+
 timeoutFor :: Maybe Int -> ResponseTimeout
-timeoutFor secs = responseTimeoutMicro (maybe defaultTimeoutMicros (* 1000000) secs)
+timeoutFor mSecs = responseTimeoutMicro (maybe defaultTimeoutMicros toMicros mSecs)
+  where
+    maxSecs = maxBound `quot` 1000000
+    toMicros s
+      | s <= 0 = 0
+      | s > maxSecs = maxBound
+      | otherwise = s * 1000000
 
 -- | POST a JSON document; classify non-2xx responses into 'LLMError's.
 --
@@ -63,14 +87,19 @@ postJSON url extraHeaders timeoutSecs payload =
   buildRequest url extraHeaders timeoutSecs payload >>= \case
     Left e -> pure (Left e)
     Right req ->
-      try (httpLbs req globalManager) >>= \case
-        Left ex -> pure (Left (HttpError (T.pack (show (ex :: SomeException)))))
-        Right res ->
-          let status = statusCode (responseStatus res)
-              body = responseBody res
-           in if statusIsSuccessful (responseStatus res)
-                then pure (Right (status, responseHeaders res, body))
-                else pure (Left (classifyHttpError status (responseHeaders res) body))
+      trySync (withResponse req globalManager $ \res -> do
+        let status = statusCode (responseStatus res)
+            hdrs = responseHeaders res
+        bodyRes <- drainWithLimit maxResponseBodyBytes (responseBody res)
+        case bodyRes of
+          Left err -> pure (Left err)
+          Right body ->
+            if statusIsSuccessful (responseStatus res)
+              then pure (Right (status, hdrs, body))
+              else pure (Left (classifyHttpError status hdrs body)))
+        >>= \case
+          Left ex -> pure (Left (HttpError (T.pack (show (ex :: SomeException)))))
+          Right r -> pure r
 
 -- | POST a JSON document and stream the response body through a callback.
 --
@@ -87,31 +116,44 @@ postJSONStream url extraHeaders timeoutSecs payload cb =
   buildRequest url extraHeaders timeoutSecs payload >>= \case
     Left e -> pure (Left e)
     Right req ->
-      try (withResponse req globalManager $ \res ->
-            let status = statusCode (responseStatus res)
-             in if statusIsSuccessful (responseStatus res)
-                  then pump (responseBody res) (Right ())
-                  else do
-                    body <- drain (responseBody res)
-                    pure (Left (classifyHttpError status (responseHeaders res) body)))
+      trySync (withResponse req globalManager $ \res ->
+        let status = statusCode (responseStatus res)
+            hdrs = responseHeaders res
+         in if statusIsSuccessful (responseStatus res)
+              then pump (responseBody res) 0
+              else do
+                bodyRes <- drainWithLimit maxResponseBodyBytes (responseBody res)
+                case bodyRes of
+                  Left err -> pure (Left err)
+                  Right body -> pure (Left (classifyHttpError status hdrs body)))
         >>= \case
           Left ex -> pure (Left (HttpError (T.pack (show (ex :: SomeException)))))
           Right r -> pure r
   where
-    pump body acc = do
+    pump body total = do
       chunk <- brRead body
       if BS.null chunk
-        then pure acc
-        else do
-          cb chunk
-          pump body acc
-    drain body = go []
-      where
-        go acc = do
-          chunk <- brRead body
-          if BS.null chunk
-            then pure (LBS.fromChunks (reverse acc))
-            else go (chunk : acc)
+        then pure (Right ())
+        else
+          let newTotal = total + BS.length chunk
+           in if newTotal > maxResponseBodyBytes
+                then pure (Left (HttpError ("Response stream exceeded maximum limit of " <> T.pack (show maxResponseBodyBytes) <> " bytes")))
+                else do
+                  cb chunk
+                  pump body newTotal
+
+drainWithLimit :: Int -> BodyReader -> IO (Either LLMError LBS.ByteString)
+drainWithLimit limit body = go 0 []
+  where
+    go total acc = do
+      chunk <- brRead body
+      if BS.null chunk
+        then pure (Right (LBS.fromChunks (reverse acc)))
+        else
+          let newTotal = total + BS.length chunk
+           in if newTotal > limit
+                then pure (Left (HttpError ("Response body exceeded maximum limit of " <> T.pack (show limit) <> " bytes")))
+                else go newTotal (chunk : acc)
 
 buildRequest ::
   Text ->
@@ -120,7 +162,7 @@ buildRequest ::
   Value ->
   IO (Either LLMError Request)
 buildRequest url extraHeaders timeoutSecs payload =
-  try (parseRequest (ensureScheme url)) >>= \case
+  trySync (parseRequest (ensureScheme url)) >>= \case
     Left ex ->
       pure (Left (HttpError ("invalid URL " <> url <> ": " <> T.pack (show (ex :: SomeException)))))
     Right req0 ->
@@ -153,10 +195,12 @@ classifyHttpError status hdrs body
         }
 
 parseRetryAfter :: [Header] -> Maybe Int
-parseRetryAfter hdrs =
-  case lookup "Retry-After" hdrs of
-    Nothing -> Nothing
-    Just bs ->
-      case reads (T.unpack (decodeUtf8With lenientDecode bs)) of
-        [(n, "")] -> Just n
-        _ -> Nothing
+parseRetryAfter hdrs = do
+  bs <- lookup "Retry-After" hdrs
+  let raw = T.strip (decodeUtf8With lenientDecode bs)
+      clean = T.dropWhileEnd (\c -> c == 's' || c == 'S') raw
+  case reads (T.unpack clean) of
+    [(n, "")] | n >= 0 -> Just n
+    _ -> case reads (T.unpack clean) :: [(Double, String)] of
+      [(d, "")] | d >= 0 -> Just (ceiling d)
+      _ -> Nothing

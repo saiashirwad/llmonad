@@ -175,10 +175,36 @@ spec = do
           other -> expectationFailure ("expected 1 tool call, got: " <> show other)
         Left e -> expectationFailure (show e)
 
-    it "ignores [DONE]" $ do
+    it "ignores [DONE] but marks stream as completed" $ do
       let (st, evts) = handleOpenAIChunk initialOAIStreamState "[DONE]"
       evts `shouldBe` []
       finalizeOAIStream st `shouldSatisfy` either (const False) (\r -> crspText r == "")
+
+    it "completes stream with [DONE] after text deltas without finish_reason" $ do
+      let chunks =
+            [ "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"
+            , "[DONE]"
+            ]
+          st = foldl (\s c -> fst (handleOpenAIChunk s c)) initialOAIStreamState chunks
+      case finalizeOAIStream st of
+        Right resp -> do
+          crspText resp `shouldBe` "Hello"
+          crspFinishReason resp `shouldBe` FrStop
+        Left e -> expectationFailure (show e)
+
+    it "rejects truncated stream ending abruptly without [DONE] or finish_reason" $ do
+      let chunks =
+            [ "{\"choices\":[{\"delta\":{\"content\":\"Incomplete response\"}}]}"
+            ]
+          st = foldl (\s c -> fst (handleOpenAIChunk s c)) initialOAIStreamState chunks
+      case finalizeOAIStream st of
+        Left (HttpError _) -> pure ()
+        other -> expectationFailure ("expected HttpError on truncated stream, got: " <> show other)
+
+    it "rejects empty stream without [DONE] or finish_reason" $ do
+      case finalizeOAIStream initialOAIStreamState of
+        Left (HttpError _) -> pure ()
+        other -> expectationFailure ("expected HttpError on empty stream, got: " <> show other)
   where
     streamEventText (SEText t) = t
     streamEventText _ = ""
