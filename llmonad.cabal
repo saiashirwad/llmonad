@@ -191,6 +191,8 @@ test-suite llmonad-test
         LLMonad.Batch2ChallengerStressSpec
         LLMonad.Batch2ChallengerSpec
         LLMonad.Batch3AdversarialSpec
+        LLMonad.Batch3ChallengerStressSpec
+        LLMonad.Batch3ChallengerSpec
         LLMonad.Mock
     build-depends:
         base >= 4.16 && < 5,
