@@ -62,6 +62,7 @@ module LLMonad.Tools.Coding
   ) where
 
 import Control.Applicative (asum)
+import Control.Monad (forM)
 import Data.Aeson
   ( FromJSON (..)
   , Key
@@ -82,6 +83,7 @@ import Effectful
 import GHC.Generics (Generic)
 import LLMonad.Schema (ToSchema (..))
 import LLMonad.Tools (Tool, tool')
+import System.FilePath (makeRelative, (</>))
 import LLMonad.World
   ( CommandSpec (..)
   , DirEntry (..)
@@ -193,12 +195,18 @@ runViewFile ViewFileArgs{..} = do
               let offsetLines = drop offset indexedLines
               let maxBytes = 46080
               let (finalLines, isTrunc) = truncateLines maxBytes offsetLines
+              let actualStartLine = case finalLines of
+                    (firstLine : _) -> lineIndex firstLine
+                    []              -> start
+              let actualEndLine = case reverse finalLines of
+                    (lastLine : _)  -> lineIndex lastLine
+                    []              -> start
               pure $ Right ViewFileResult
                 { vfrPath          = fp
                 , vfrTotalLines    = totalLines
                 , vfrTotalBytes    = totalBytes
-                , vfrStartLine     = start
-                , vfrEndLine       = if null rawSlice then start else start + length rawSlice - 1
+                , vfrStartLine     = actualStartLine
+                , vfrEndLine       = actualEndLine
                 , vfrLines         = finalLines
                 , vfrIsTruncated   = isTrunc
                 , vfrContentOffset = offset
@@ -545,14 +553,46 @@ runListDir ListDirArgs{..} = do
   if not isDir
     then pure (Left ("Directory not found: " <> T.pack dir))
     else do
-      entries <- listDirectory dir
-      let mapped = map (\e -> DirEntryInfo
-            { deiName       = T.pack (deName e)
-            , deiIsDir      = deIsDir e
-            , deiSizeBytes  = if deIsDir e then Nothing else Just (deSize e)
-            , deiChildCount = Nothing
-            }) entries
-      pure $ Right (ListDirResult dir mapped)
+      let isRec = recursive == Just True || maybe False (> 1) maxDepth
+      let effMaxDepth = case (recursive, maxDepth) of
+            (Just True, Nothing) -> Nothing
+            (Just True, Just d)  -> Just d
+            (_, Just d)          -> Just d
+            (_, Nothing)         -> Just 1
+      entries <- if isRec
+        then collectDirEntries dir dir 1 effMaxDepth
+        else do
+          rawEntries <- listDirectory dir
+          pure [ DirEntryInfo
+                   { deiName       = T.pack (deName e)
+                   , deiIsDir      = deIsDir e
+                   , deiSizeBytes  = if deIsDir e then Nothing else Just (deSize e)
+                   , deiChildCount = Nothing
+                   }
+               | e <- rawEntries
+               ]
+      pure $ Right (ListDirResult dir entries)
+
+collectDirEntries :: (World :> es) => FilePath -> FilePath -> Int -> Maybe Int -> Eff es [DirEntryInfo]
+collectDirEntries baseDir currentDir currentDepth maxD = do
+  rawEntries <- listDirectory currentDir
+  subResults <- forM rawEntries $ \e -> do
+    let childPath = currentDir </> deName e
+    let relName = makeRelative baseDir childPath
+    let isD = deIsDir e
+    let sz = if isD then Nothing else Just (deSize e)
+    let entryInfo = DirEntryInfo
+          { deiName       = T.pack relName
+          , deiIsDir      = isD
+          , deiSizeBytes  = sz
+          , deiChildCount = Nothing
+          }
+    if isD && maybe True (currentDepth + 1 <=) maxD
+      then do
+        children <- collectDirEntries baseDir childPath (currentDepth + 1) maxD
+        pure (entryInfo : children)
+      else pure [entryInfo]
+  pure (concat subResults)
 
 -- | Type-safe 'Tool' for listing directory contents.
 listDirTool :: (World :> es) => Tool (Eff es)
@@ -608,10 +648,12 @@ data RunCommandResult
 runRunCommand :: (World :> es) => RunCommandArgs -> Eff es (Either Text RunCommandResult)
 runRunCommand RunCommandArgs{..} = do
   let cmd = commandLine
-  let spec = CommandSpec "/bin/sh" ["-c", cmd] cwd Nothing timeoutMs Nothing
+  let defaultTimeoutMs = 30000
+  let effectiveTimeoutMs = Just (fromMaybe defaultTimeoutMs timeoutMs)
+  let spec = CommandSpec "/bin/sh" ["-c", cmd] cwd Nothing effectiveTimeoutMs Nothing
   res <- runCommand spec
   if prTimedOut res
-    then pure $ Right (CommandTimedOut (fromMaybe 0 timeoutMs) (prStdout res) (prStderr res))
+    then pure $ Right (CommandTimedOut (fromMaybe defaultTimeoutMs timeoutMs) (prStdout res) (prStderr res))
     else pure $ Right (CommandCompleted (prExitCode res) (prStdout res) (prStderr res) (prDurationMs res))
 
 -- | Type-safe 'Tool' for running shell commands.

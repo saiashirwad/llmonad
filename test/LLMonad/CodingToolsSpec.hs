@@ -49,6 +49,21 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
           vfrStartLine vfr `shouldBe` 1
           vfrEndLine vfr `shouldBe` 800
 
+    it "accurately sets vfrEndLine matching the last truncated line when byte limit is hit" $ do
+      let lineTextContent = T.replicate 100 "A"
+      let manyLines = T.unlines (replicate 600 lineTextContent)
+      let st = initMemoryWorld [("large.txt", manyLines)]
+      (res, _) <- runEff $ runWorldMemory st $ do
+        runViewFile (ViewFileArgs "large.txt" (Just 1) (Just 600) Nothing)
+
+      case res of
+        Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
+        Right vfr -> do
+          vfrIsTruncated vfr `shouldBe` True
+          let count = length (vfrLines vfr)
+          vfrEndLine vfr `shouldBe` count
+          vfrEndLine vfr `shouldBe` lineIndex (last (vfrLines vfr))
+
     it "returns error when file does not exist" $ do
       let st = initMemoryWorld []
       (res, _) <- runEff $ runWorldMemory st $ do
@@ -313,6 +328,40 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
           map deiName (ldrEntries ldr) `shouldBe` ["README.md", "package.json", "src"]
           map deiIsDir (ldrEntries ldr) `shouldBe` [False, False, True]
 
+    it "lists directory contents recursively when recursive = Just True" $ do
+      let files =
+            [ ("project/README.md", "# Readme")
+            , ("project/package.json", "{}")
+            , ("project/src/index.js", "console.log()")
+            , ("project/src/util/helper.js", "export const x = 1;")
+            ]
+      let st = initMemoryWorld files
+      (res, _) <- runEff $ runWorldMemory st $ do
+        runListDir (ListDirArgs "project" (Just True) Nothing)
+
+      case res of
+        Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
+        Right ldr -> do
+          let names = map deiName (ldrEntries ldr)
+          names `shouldContain` ["README.md", "package.json", "src", "src/index.js", "src/util", "src/util/helper.js"]
+
+    it "respects maxDepth when listing directory contents" $ do
+      let files =
+            [ ("project/README.md", "# Readme")
+            , ("project/src/index.js", "console.log()")
+            , ("project/src/util/helper.js", "export const x = 1;")
+            ]
+      let st = initMemoryWorld files
+      (res, _) <- runEff $ runWorldMemory st $ do
+        runListDir (ListDirArgs "project" (Just True) (Just 1))
+
+      case res of
+        Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
+        Right ldr -> do
+          let names = map deiName (ldrEntries ldr)
+          names `shouldContain` ["README.md", "src"]
+          names `shouldNotContain` ["src/index.js", "src/util/helper.js"]
+
     it "returns error when directory does not exist" $ do
       let st = initMemoryWorld []
       (res, _) <- runEff $ runWorldMemory st $ do
@@ -334,9 +383,9 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
           Error err   -> expectationFailure ("JSON decode failed: " <> err)
 
   describe "6. runCommandTool" $ do
-    it "executes command synchronously and returns CommandCompleted" $ do
+    it "executes command synchronously and returns CommandCompleted with default bounded timeout" $ do
       let st = initMemoryWorld []
-      (res, _) <- runEff $ runWorldMemory st $ do
+      (res, finalSt) <- runEff $ runWorldMemory st $ do
         runRunCommand (RunCommandArgs "echo hello" Nothing Nothing Nothing Nothing)
 
       case res of
@@ -344,6 +393,9 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
         Right (CommandCompleted code stdout _ _) -> do
           code `shouldBe` 0
           stdout `shouldBe` "hello\n"
+          case mwsCommandHistory finalSt of
+            (cmd : _) -> cmdTimeoutMs cmd `shouldBe` Just 30000
+            []        -> expectationFailure "Expected recorded command in history"
         Right other -> expectationFailure ("Expected CommandCompleted, got: " <> show other)
 
     it "reports CommandTimedOut when timeout expires" $ do

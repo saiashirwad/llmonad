@@ -449,5 +449,25 @@ spec = describe "LLMonad.World (Milestone 1)" $ do
             res `shouldBe` ("run " <> T.pack (show (i :: Int)))
             wsExitCode summary `shouldBe` 0
 
+    describe "Workspace Root Containment & Process Supervision Guarantees" $ do
+      it "throws WorldPathOutsideWorkspace on relative .. escape" $ do
+        withSystemTempDirectory "llmonad-local-escape" $ \tmpDir -> do
+          let action = runEff $ runWorldLocal tmpDir (readFileText "../escape.txt")
+          action `shouldThrow` (\case WorldPathOutsideWorkspace "../escape.txt" _ -> True; _ -> False)
+
+      it "throws WorldPathOutsideWorkspace on absolute path escape" $ do
+        withSystemTempDirectory "llmonad-local-escape-abs" $ \tmpDir -> do
+          let action = runEff $ runWorldLocal tmpDir (readFileText "/etc/hosts")
+          action `shouldThrow` (\case WorldPathOutsideWorkspace "/etc/hosts" _ -> True; _ -> False)
+
+      it "executes process with concurrent stdin writing and stdout reading without pipe deadlock" $ do
+        withSystemTempDirectory "llmonad-local-supervision" $ \tmpDir -> do
+          let bigPayload = T.replicate 2000 "01234567890123456789012345678901234567890123456789\n" -- 100KB+
+          let specBi = CommandSpec "cat" [] Nothing Nothing (Just 5000) (Just bigPayload)
+          res <- runEff $ runWorldLocal tmpDir (runCommand specBi)
+          prExitCode res `shouldBe` 0
+          prTimedOut res `shouldBe` False
+          prStdout res `shouldBe` bigPayload
+
 isPrefixOfText :: Text -> Text -> Bool
 isPrefixOfText p t = p `T.isPrefixOf` t

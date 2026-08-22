@@ -12,14 +12,16 @@ module LLMonad.World.Local
   ( -- * Local World Interpreter
     runWorldLocal
   , resolveLocalPath
+  , resolveSafeLocalPath
+  , isInsideRoot
   , runLocalProcess
   ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, cancel, wait)
+import Control.Concurrent.Async (cancel, wait, withAsync)
 import qualified Control.Exception as E
 import Control.Monad (forM, when)
-import Data.List (sort, tails)
+import Data.List (isPrefixOf, sort, tails)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -39,8 +41,15 @@ import System.Directory
   )
 import qualified System.Directory as SD
 import System.Exit (ExitCode (..))
-import System.FilePath (isAbsolute, makeRelative, normalise, takeDirectory, (</>))
-import System.IO (hClose, hFlush)
+import System.FilePath
+  ( dropTrailingPathSeparator
+  , isAbsolute
+  , makeRelative
+  , normalise
+  , takeDirectory
+  , (</>)
+  )
+import System.IO (Handle, hClose, hFlush)
 import System.Process
   ( CreateProcess (..)
   , StdStream (..)
@@ -56,12 +65,12 @@ import System.Process
 runWorldLocal :: (IOE :> es) => FilePath -> Eff (World : es) a -> Eff es a
 runWorldLocal root action = do
   canonicalRoot <- liftIO (canonicalizePath root)
-  interpret (localWorldHandler canonicalRoot) action
+  interpret (localWorldHandler (cleanRoot canonicalRoot)) action
 
 localWorldHandler :: (IOE :> es) => FilePath -> EffectHandler World es
 localWorldHandler canonicalRoot _ = \case
   ReadFileText fp -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     isDir <- doesDirectoryExist target
     if isDir
       then E.throwIO (WorldIsADirectory fp)
@@ -72,7 +81,7 @@ localWorldHandler canonicalRoot _ = \case
           else E.catch (TIO.readFile target) (\(e :: E.SomeException) -> E.throwIO (WorldIOError (T.pack (show e))))
 
   ReadFileSlice fp mStart mEnd -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     isDir <- doesDirectoryExist target
     if isDir
       then E.throwIO (WorldIsADirectory fp)
@@ -90,7 +99,7 @@ localWorldHandler canonicalRoot _ = \case
             pure (T.unlines slice)
 
   WriteFileText fp content -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     isDir <- doesDirectoryExist target
     if isDir
       then E.throwIO (WorldIsADirectory fp)
@@ -99,18 +108,18 @@ localWorldHandler canonicalRoot _ = \case
         E.catch (TIO.writeFile target content) (\(e :: E.SomeException) -> E.throwIO (WorldIOError (T.pack (show e))))
 
   DeleteFile fp -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     exists <- doesFileExist target
     if not exists
       then E.throwIO (WorldFileNotFound fp)
       else E.catch (removeFile target) (\(e :: E.SomeException) -> E.throwIO (WorldIOError (T.pack (show e))))
 
   CreateDirectory fp createParents -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     E.catch (createDirectoryIfMissing createParents target) (\(e :: E.SomeException) -> E.throwIO (WorldIOError (T.pack (show e))))
 
   ListDirectory fp -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     isDir <- doesDirectoryExist target
     if not isDir
       then E.throwIO (WorldDirectoryNotFound fp)
@@ -131,12 +140,12 @@ localWorldHandler canonicalRoot _ = \case
         pure entries
 
   SearchFiles opts -> liftIO $ do
-    let searchRoot = resolveLocalPath canonicalRoot (soSearchDir opts)
+    searchRoot <- resolveSafeLocalPath canonicalRoot (soSearchDir opts)
     exists <- doesDirectoryExist searchRoot
     if not exists
       then E.throwIO (WorldDirectoryNotFound (soSearchDir opts))
       else do
-        allFiles <- collectFilesRecursively searchRoot
+        allFiles <- collectFilesRecursively canonicalRoot searchRoot
         let query = soQuery opts
         let isCaseInsensitive = soCaseInsensitive opts
         let maxMatches = soMaxMatches opts
@@ -168,12 +177,12 @@ localWorldHandler canonicalRoot _ = \case
         pure (maybe flattened (`take` flattened) maxMatches)
 
   FindFiles opts -> liftIO $ do
-    let searchRoot = resolveLocalPath canonicalRoot (foSearchDir opts)
+    searchRoot <- resolveSafeLocalPath canonicalRoot (foSearchDir opts)
     exists <- doesDirectoryExist searchRoot
     if not exists
       then E.throwIO (WorldDirectoryNotFound (foSearchDir opts))
       else do
-        items <- collectFindEntries searchRoot (foMaxDepth opts)
+        items <- collectFindEntries canonicalRoot searchRoot (foMaxDepth opts)
         let pat = foPattern opts
         let ftype = foTypeFilter opts
         let excludes = foExcludes opts
@@ -195,22 +204,53 @@ localWorldHandler canonicalRoot _ = \case
         pure (map (makeRelative canonicalRoot . fst) filtered)
 
   DoesPathExist fp -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     fExists <- doesFileExist target
     dExists <- doesDirectoryExist target
     pure (fExists || dExists)
 
   DoesFileExist fp -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     doesFileExist target
 
   DoesDirectoryExist fp -> liftIO $ do
-    let target = resolveLocalPath canonicalRoot fp
+    target <- resolveSafeLocalPath canonicalRoot fp
     doesDirectoryExist target
 
   GetWorkspaceRoot -> pure canonicalRoot
 
   RunCommand spec -> liftIO $ runLocalProcess spec canonicalRoot
+
+-- | Resolve relative or absolute path against workspace root with strict containment validation.
+-- Throws 'WorldPathOutsideWorkspace' when target path escapes the workspace root boundary.
+resolveSafeLocalPath :: FilePath -> FilePath -> IO FilePath
+resolveSafeLocalPath root fp = do
+  canonicalRoot <- canonicalizePath root
+  let cRoot = cleanRoot canonicalRoot
+  let raw = if isAbsolute fp
+              then normalise fp
+              else normalise (cRoot </> fp)
+  canon <- canonicalizePath raw
+  if isInsideRoot cRoot canon
+    then pure canon
+    else E.throwIO (WorldPathOutsideWorkspace fp cRoot)
+
+-- | Check if target path lies strictly inside or equals workspace root.
+isInsideRoot :: FilePath -> FilePath -> Bool
+isInsideRoot canonRoot canonTarget =
+  let normRoot = normalise canonRoot
+      normTarget = normalise canonTarget
+   in normRoot == "/" || normRoot == normTarget
+      || (normRoot `isPrefixOf` normTarget
+          && case drop (length normRoot) normTarget of
+               ('/' : _)  -> True
+               ('\\' : _) -> True
+               _          -> False)
+
+cleanRoot :: FilePath -> FilePath
+cleanRoot r =
+  let n = normalise r
+   in if n == "/" then "/" else dropTrailingPathSeparator n
 
 -- | Resolve relative or absolute path against workspace root.
 resolveLocalPath :: FilePath -> FilePath -> FilePath
@@ -224,7 +264,9 @@ runLocalProcess spec defaultCwd = do
   startT <- getPOSIXTime
   let progStr = T.unpack (cmdProgram spec)
   let argsStr = map T.unpack (cmdArgs spec)
-  let cwdStr  = maybe (Just defaultCwd) (Just . resolveLocalPath defaultCwd) (cmdCwd spec)
+  cwdStr <- case cmdCwd spec of
+    Nothing  -> pure (Just defaultCwd)
+    Just dir -> Just <$> resolveSafeLocalPath defaultCwd dir
   let envList = fmap (map (\(k, v) -> (T.unpack k, T.unpack v))) (cmdEnv spec)
   let cp = (proc progStr argsStr)
         { cwd = cwdStr
@@ -238,103 +280,115 @@ runLocalProcess spec defaultCwd = do
   let timeoutUs = fmap (\ms -> ms * 1000) (cmdTimeoutMs spec)
 
   (minH, moutH, merrH, ph) <- createProcess cp
-  case (minH, cmdStdin spec) of
-    (Just inH, Just inText) -> do
-      E.catch (TIO.hPutStr inH inText >> hFlush inH >> hClose inH) (\(_ :: E.SomeException) -> pure ())
-    (Just inH, Nothing) -> hClose inH
-    (Nothing, _) -> pure ()
 
-  case (moutH, merrH) of
-    (Just outH, Just errH) -> do
-      outAsync <- async (TIO.hGetContents outH)
-      errAsync <- async (TIO.hGetContents errH)
+  let writeStdinAction = case (minH, cmdStdin spec) of
+        (Just inH, Just inText) ->
+          E.catch (TIO.hPutStr inH inText >> hFlush inH >> hClose inH)
+                  (\(_ :: E.SomeException) -> E.catch (hClose inH) (\(_ :: E.SomeException) -> pure ()))
+        (Just inH, Nothing) ->
+          E.catch (hClose inH) (\(_ :: E.SomeException) -> pure ())
+        (Nothing, _) -> pure ()
 
-      (code, wasTimeout) <- case timeoutUs of
-        Nothing -> do
-          c <- waitForProcess ph
-          pure (c, False)
-        Just totalUs ->
-          let pollLoop remainingUs
-                | remainingUs <= 0 = do
-                    E.catch (interruptProcessGroupOf ph) (\(_ :: E.SomeException) -> pure ())
-                    E.catch (terminateProcess ph) (\(_ :: E.SomeException) -> pure ())
-                    pure (ExitFailure (-1), True)
-                | otherwise = do
-                    mExit <- E.catch (getProcessExitCode ph) (\(_ :: E.SomeException) -> pure (Just (ExitFailure (-1))))
-                    case mExit of
-                      Just c -> pure (c, False)
-                      Nothing -> do
-                        let step = min remainingUs 5000 -- 5ms
-                        threadDelay step
-                        pollLoop (remainingUs - step)
-          in pollLoop totalUs
+  let readOutAction = case moutH of
+        Just outH -> do
+          txt <- E.catch (TIO.hGetContents outH) (\(_ :: E.SomeException) -> pure "")
+          _ <- E.evaluate (T.length txt)
+          pure txt
+        Nothing -> pure ""
 
-      (outText, errText) <- if wasTimeout
-        then do
-          cancel outAsync
-          cancel errAsync
-          pure ("", "Process timed out")
-        else do
-          o <- wait outAsync
-          e <- wait errAsync
-          pure (o, e)
-      hClose outH
-      hClose errH
+  let readErrAction = case merrH of
+        Just errH -> do
+          txt <- E.catch (TIO.hGetContents errH) (\(_ :: E.SomeException) -> pure "")
+          _ <- E.evaluate (T.length txt)
+          pure txt
+        Nothing -> pure ""
 
-      endT <- getPOSIXTime
-      let elapsedMs = realToFrac (endT - startT) * 1000.0
+  withAsync writeStdinAction $ \_inAsync ->
+    withAsync readOutAction $ \outAsync ->
+      withAsync readErrAction $ \errAsync -> do
+        (code, wasTimeout) <- case timeoutUs of
+          Nothing -> do
+            c <- waitForProcess ph
+            pure (c, False)
+          Just totalUs ->
+            let pollLoop remainingUs
+                  | remainingUs <= 0 = do
+                      E.catch (interruptProcessGroupOf ph) (\(_ :: E.SomeException) -> pure ())
+                      E.catch (terminateProcess ph) (\(_ :: E.SomeException) -> pure ())
+                      _ <- E.catch (waitForProcess ph) (\(_ :: E.SomeException) -> pure (ExitFailure (-1)))
+                      pure (ExitFailure (-1), True)
+                  | otherwise = do
+                      mExit <- E.catch (getProcessExitCode ph) (\(_ :: E.SomeException) -> pure (Just (ExitFailure (-1))))
+                      case mExit of
+                        Just c -> do
+                          _ <- E.catch (waitForProcess ph) (\(_ :: E.SomeException) -> pure c)
+                          pure (c, False)
+                        Nothing -> do
+                          let step = min remainingUs 5000 -- 5ms
+                          threadDelay step
+                          pollLoop (remainingUs - step)
+            in pollLoop totalUs
 
-      if wasTimeout
-        then pure ProcessResult
-          { prExitCode   = -1
-          , prStdout     = ""
-          , prStderr     = "Process timed out"
-          , prDurationMs = elapsedMs
-          , prTimedOut   = True
-          }
-        else do
-          let exitVal = case code of
-                ExitSuccess -> 0
-                ExitFailure n -> n
-          pure ProcessResult
-            { prExitCode   = exitVal
-            , prStdout     = outText
-            , prStderr     = errText
+        (outText, errText) <- if wasTimeout
+          then do
+            cancel outAsync
+            cancel errAsync
+            pure ("", "Process timed out")
+          else do
+            o <- wait outAsync
+            e <- wait errAsync
+            pure (o, e)
+
+        case moutH of
+          Just outH -> E.catch (hClose outH) (\(_ :: E.SomeException) -> pure ())
+          Nothing   -> pure ()
+        case merrH of
+          Just errH -> E.catch (hClose errH) (\(_ :: E.SomeException) -> pure ())
+          Nothing   -> pure ()
+
+        endT <- getPOSIXTime
+        let elapsedMs = realToFrac (endT - startT) * 1000.0
+
+        if wasTimeout
+          then pure ProcessResult
+            { prExitCode   = -1
+            , prStdout     = ""
+            , prStderr     = "Process timed out"
             , prDurationMs = elapsedMs
-            , prTimedOut   = False
+            , prTimedOut   = True
             }
+          else do
+            let exitVal = case code of
+                  ExitSuccess -> 0
+                  ExitFailure n -> n
+            pure ProcessResult
+              { prExitCode   = exitVal
+              , prStdout     = outText
+              , prStderr     = errText
+              , prDurationMs = elapsedMs
+              , prTimedOut   = False
+              }
 
-    _ -> do
-      code <- waitForProcess ph
-      endT <- getPOSIXTime
-      let elapsedMs = realToFrac (endT - startT) * 1000.0
-      let exitVal = case code of
-            ExitSuccess -> 0
-            ExitFailure n -> n
-      pure ProcessResult
-        { prExitCode   = exitVal
-        , prStdout     = ""
-        , prStderr     = ""
-        , prDurationMs = elapsedMs
-        , prTimedOut   = False
-        }
-
--- | Recursively collect all files under a directory, ignoring hidden directories.
-collectFilesRecursively :: FilePath -> IO [FilePath]
-collectFilesRecursively dir = do
+-- | Recursively collect all files under a directory, ignoring hidden directories and escaping symlinks.
+collectFilesRecursively :: FilePath -> FilePath -> IO [FilePath]
+collectFilesRecursively canonicalRoot dir = do
   names <- SD.listDirectory dir
   let filtered = sort (filter (\n -> not (n == ".git" || n == "dist-newstyle" || n == ".agents")) names)
   paths <- forM filtered $ \name -> do
     let path = dir </> name
-    isD <- doesDirectoryExist path
-    if isD
-      then collectFilesRecursively path
-      else pure [path]
+    canonPath <- canonicalizePath path
+    if not (isInsideRoot canonicalRoot canonPath)
+      then pure []
+      else do
+        isD <- doesDirectoryExist canonPath
+        if isD
+          then collectFilesRecursively canonicalRoot canonPath
+          else pure [canonPath]
   pure (concat paths)
 
--- | Recursively collect entries with directory flag and depth tracking.
-collectFindEntries :: FilePath -> Maybe Int -> IO [(FilePath, Bool)]
-collectFindEntries root maxDepth = go root 0
+-- | Recursively collect entries with directory flag and depth tracking, avoiding escapes.
+collectFindEntries :: FilePath -> FilePath -> Maybe Int -> IO [(FilePath, Bool)]
+collectFindEntries canonicalRoot root maxDepth = go root 0
   where
     go currentDir currentDepth = do
       when (maybe False (currentDepth >) maxDepth) $ pure ()
@@ -342,12 +396,16 @@ collectFindEntries root maxDepth = go root 0
       let filtered = filter (\n -> not (n == ".git" || n == "dist-newstyle" || n == ".agents")) names
       results <- forM filtered $ \name -> do
         let path = currentDir </> name
-        isD <- doesDirectoryExist path
-        let self = [(path, isD)]
-        sub <- if isD && maybe True (currentDepth + 1 <=) maxDepth
-                 then go path (currentDepth + 1)
-                 else pure []
-        pure (self ++ sub)
+        canonPath <- canonicalizePath path
+        if not (isInsideRoot canonicalRoot canonPath)
+          then pure []
+          else do
+            isD <- doesDirectoryExist canonPath
+            let self = [(path, isD)]
+            sub <- if isD && maybe True (currentDepth + 1 <=) maxDepth
+                     then go canonPath (currentDepth + 1)
+                     else pure []
+            pure (self ++ sub)
       pure (concat results)
 
 -- | Check if a line matches the search query.

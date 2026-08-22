@@ -120,12 +120,14 @@ data World :: Effect where
 
 #### 1. Local Workspace Interpreter (`runWorldLocal`)
 Executes real filesystem operations and subprocesses rooted at a designated base directory.
+- **Path Traversal Containment**: Strictly validates all paths against the canonical workspace root. Rejects relative traversal (`..`), absolute paths escaping the root, and symlinks resolving outside the root with `WorldPathOutsideWorkspace`.
+- **Concurrent Process Supervision**: Runs stdin writing and stdout/stderr reading concurrently via async streams to prevent OS pipe deadlocks (>64KB). Enforces process group timeouts and calls `waitForProcess` to reap child processes and prevent zombie processes.
 ```haskell
 runWorldLocal :: IOE :> es => FilePath -> Eff (World : es) a -> Eff es a
 ```
 
 #### 2. Ephemeral Git Worktree Interpreter (`runWorldWorktree`)
-Creates an isolated Git worktree on an ephemeral branch (`agent-worktree-<timestamp>`), executes the computation, computes unified diffs, and automatically deletes the worktree on completion or failure.
+Creates an isolated Git worktree on an ephemeral branch (`agent-worktree-<timestamp>`), executes the computation within the workspace sandbox, computes unified diffs, and automatically deletes the worktree on completion or failure.
 ```haskell
 runWorldWorktree :: (IOE :> es, World :> es) => FilePath -> Text -> Eff (World : es) a -> Eff es (Either Text a)
 
@@ -195,12 +197,12 @@ LLMonad provides six standard coding tools backed by the `World` effect:
 
 | Tool | Purpose | Key Parameters | Boundary Protection |
 |---|---|---|---|
-| `viewFile` | Read entire file or 1-indexed line window | `filePath`, `startLine`, `endLine` | Byte truncation (46,080B), automatic window clamping |
+| `viewFile` | Read entire file or 1-indexed line window | `filePath`, `startLine`, `endLine`, `contentOffset` | Byte truncation (46,080B), accurate line range reporting (`vfrEndLine`), automatic window clamping |
 | `editFile` | Replace code snippets in files | `targetFile`, `targetContent`, `replacementContent`, `startLine`, `endLine`, `allowMultiple` | Ambiguity rejection if multiple matches occur without `allowMultiple = true`, automatic unified diff calculation |
 | `grepSearch` | Search file contents by pattern | `query`, `searchPath`, `caseInsensitive`, `isRegex`, `includes` | Path filtering, regex safety, line numbering |
 | `findByName` | Search filesystem hierarchy | `pattern`, `searchDirectory`, `type`, `maxDepth`, `excludes` | Depth limiting, glob matching, symlink loop avoidance |
-| `listDir` | Inspect directory contents | `directoryPath` | Metadata reporting (is directory, file size, child count) |
-| `runCommand` | Run shell commands and subprocesses | `commandLine`, `cwd`, `timeoutMs` | Timeout termination, stdout/stderr separation |
+| `listDir` | Inspect directory contents | `directoryPath`, `recursive`, `maxDepth` | Recursive tree discovery, depth bounding, metadata reporting (is directory, file size, child count) |
+| `runCommand` | Run shell commands and subprocesses | `commandLine`, `cwd`, `timeoutMs` | Default bounded timeout (30,000ms), pipe deadlock prevention, process group termination and child reaping |
 
 ### Subagent Delegation (`LLMonad.Subagent`)
 
