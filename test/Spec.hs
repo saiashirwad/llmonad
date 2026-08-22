@@ -36,6 +36,8 @@ import qualified LLMonad.Batch3AdversarialSpec
 import qualified LLMonad.Batch3ChallengerSpec
 import qualified LLMonad.Batch3ChallengerStressSpec
 import qualified LLMonad.Batch4AdversarialSpec
+import qualified LLMonad.Batch4ChallengerSpec
+import qualified LLMonad.Batch4ChallengerStressSpec
 import Test.Hspec
 
 main :: IO ()
@@ -74,3 +76,5 @@ main = hspec $ do
   describe "Batch 3 Challenger Suite" LLMonad.Batch3ChallengerSpec.spec
   describe "Batch 3 Challenger Stress Suite" LLMonad.Batch3ChallengerStressSpec.spec
   describe "Batch 4 Adversarial Suite" LLMonad.Batch4AdversarialSpec.spec
+  describe "Batch 4 Challenger Suite" LLMonad.Batch4ChallengerSpec.spec
+  describe "Batch 4 Challenger Stress Suite" LLMonad.Batch4ChallengerStressSpec.spec

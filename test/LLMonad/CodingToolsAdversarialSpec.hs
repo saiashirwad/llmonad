@@ -32,8 +32,8 @@ spec = describe "Coding Tools & Subagents Adversarial Suite (Milestone 3)" $ do
           vfrPath vfr `shouldBe` "test.txt"
           vfrStartLine vfr `shouldBe` 1
           vfrContentOffset vfr `shouldBe` 0
-          -- endLine clamped to -5 which is < start (1), so rawSlice is empty
-          vfrLines vfr `shouldBe` []
+          -- startLine clamped to 1, endLine clamped to max start (-5) = 1
+          vfrLines vfr `shouldBe` [ViewFileLine 1 "line 1"]
 
     it "handles inverted line bounds (startLine > endLine) without crashing" $ do
       let sampleText = "line 1\nline 2\nline 3\n"
@@ -44,7 +44,9 @@ spec = describe "Coding Tools & Subagents Adversarial Suite (Milestone 3)" $ do
       case res of
         Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
         Right vfr -> do
-          vfrLines vfr `shouldBe` []
+          vfrLines vfr `shouldBe` [ViewFileLine 3 "line 3"]
+          vfrStartLine vfr `shouldBe` 3
+          vfrEndLine vfr `shouldBe` 3
 
     it "handles startLine far beyond total file lines" $ do
       let sampleText = "line 1\nline 2\n"

@@ -186,7 +186,7 @@ runViewFile ViewFileArgs{..} = do
               let start = max 1 (fromMaybe 1 startLine)
               let maxAllowedEnd = start + 799
               let requestedEnd = fromMaybe (max 1 totalLines) endLine
-              let end = min maxAllowedEnd requestedEnd
+              let end = max start (min maxAllowedEnd requestedEnd)
               let rawSlice = if start > totalLines
                     then []
                     else take (max 0 (end - start + 1)) (drop (start - 1) allLines)
