@@ -29,6 +29,7 @@ import LLMonad.Core
   ( LLM
   , chatRound
   , pushMessage
+  , withTransaction
   )
 import LLMonad.Error (LLMError (..))
 import LLMonad.Internal.Extract (decodeViaJSON)
@@ -42,7 +43,7 @@ runAgent = runAgentWith defaultAgentOpts
 
 -- | Run autonomous ReAct agent loop with custom options.
 runAgentWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
-runAgentWith opts tools instruction = do
+runAgentWith opts tools instruction = withTransaction $ do
   pushMessage (UserMsg instruction)
   loop (agentMaxRounds opts) []
   where
@@ -58,9 +59,9 @@ runAgentWith opts tools instruction = do
               | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
               | otherwise -> do
                   let currentSignatures = [(toolCallName c, toolCallArguments c) | c <- calls]
+                  mapM_ (executeAndRecord specs tools) calls
                   when (currentSignatures == prevSignatures && not (null currentSignatures)) $ do
                     pushMessage (UserMsg "Warning: Repeated identical tool call signature detected. Please adjust your plan or return the final answer.")
-                  mapM_ (executeAndRecord specs tools) calls
                   loop (roundsLeft - 1) currentSignatures
 
 -- | Run autonomous ReAct agent loop returning structured output.
@@ -75,17 +76,18 @@ runAgentStructuredWith ::
   [Tool (Eff es)] ->
   Text ->
   Eff es a
-runAgentStructuredWith opts tools instruction = do
+runAgentStructuredWith opts tools instruction = withTransaction $ do
   pushMessage (UserMsg instruction)
-  loop (agentMaxRounds opts) []
+  loopToolPhase (agentMaxRounds opts) []
   where
     specs = map toolSpec tools
     schemaFormat = RfJsonSchema (schemaTypeName @a) (toSchema @a) True
 
-    loop roundsLeft prevSignatures
+    loopToolPhase roundsLeft prevSignatures
       | roundsLeft <= 0 = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
+      | null tools = loopStructuredPhase roundsLeft
       | otherwise = do
-          resp <- chatRound (agentParams opts) schemaFormat specs ToolAuto
+          resp <- chatRound (agentParams opts) RfText specs ToolAuto
           case crspToolCalls resp of
             [] -> do
               let parsed = case crspStructuredPayload resp of
@@ -101,15 +103,34 @@ runAgentStructuredWith opts tools instruction = do
                               <> T.pack err
                               <> "). Please return ONLY valid JSON conforming to the schema."
                       pushMessage (UserMsg feedback)
-                      loop (roundsLeft - 1) prevSignatures
+                      loopStructuredPhase (roundsLeft - 1)
             calls
               | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
               | otherwise -> do
                   let currentSignatures = [(toolCallName c, toolCallArguments c) | c <- calls]
+                  mapM_ (executeAndRecord specs tools) calls
                   when (currentSignatures == prevSignatures && not (null currentSignatures)) $ do
                     pushMessage (UserMsg "Warning: Repeated identical tool call signature detected. Please adjust your plan or return the final answer.")
-                  mapM_ (executeAndRecord specs tools) calls
-                  loop (roundsLeft - 1) currentSignatures
+                  loopToolPhase (roundsLeft - 1) currentSignatures
+
+    loopStructuredPhase roundsLeft
+      | roundsLeft <= 0 = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
+      | otherwise = do
+          resp <- chatRound (agentParams opts) schemaFormat [] ToolAuto
+          let parsed = case crspStructuredPayload resp of
+                Just val -> parseEither parseJSON val
+                Nothing -> decodeViaJSON (crspText resp)
+          case parsed of
+            Right a -> pure a
+            Left err
+              | roundsLeft <= 1 -> liftIO (throwIO (DecodeError err (crspText resp)))
+              | otherwise -> do
+                  let feedback =
+                        "Your final response could not be decoded ("
+                          <> T.pack err
+                          <> "). Please return ONLY valid JSON conforming to the schema."
+                  pushMessage (UserMsg feedback)
+                  loopStructuredPhase (roundsLeft - 1)
 
 -- | Execute a single tool call and record the result message into conversation history.
 executeAndRecord :: (LLM :> es) => [ToolSpec] -> [Tool (Eff es)] -> ToolCall -> Eff es ()

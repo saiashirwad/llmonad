@@ -5,7 +5,7 @@
 module LLMonad.AgentSpec (spec) where
 
 import Control.Exception (try)
-import Data.Aeson (FromJSON, object, (.=))
+import Data.Aeson (FromJSON (..), Value (..), object, (.=))
 import Data.IORef
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -26,7 +26,13 @@ data SearchArgs = SearchArgs
   deriving (Show, Eq, Generic, FromJSON, ToSchema)
 
 data NoArgs = NoArgs {}
-  deriving (Show, Eq, Generic, FromJSON, ToSchema)
+  deriving (Show, Eq, Generic, ToSchema)
+
+instance FromJSON NoArgs where
+  parseJSON (Object _) = pure NoArgs
+  parseJSON (Array _) = pure NoArgs
+  parseJSON Null = pure NoArgs
+  parseJSON _ = fail "expected object for NoArgs"
 
 data AgentSummary = AgentSummary
   { totalSum :: Int

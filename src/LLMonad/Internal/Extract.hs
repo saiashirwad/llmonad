@@ -102,19 +102,24 @@ takeQuoted cs = walk False [] cs
 -- Given an opening delimiter already consumed, consume until its match.
 takeBalanced :: Char -> String -> Maybe Text
 takeBalanced open rest =
-  let close = if open == '{' then '}' else ']'
+  let initialStack = [if open == '{' then '}' else ']']
       walk _ _ _ _ [] = Nothing
-      walk depth inStr esc acc (c : cs)
-        | esc = walk depth True False (c : acc) cs
-        | c == '\\' && inStr = walk depth True True (c : acc) cs
-        | c == '"' = walk depth (not inStr) False (c : acc) cs
-        | not inStr && (c == '{' || c == '[') = walk (depth + 1) False False (c : acc) cs
-        | not inStr && (c == '}' || c == ']') =
-            if c == close && depth == 1
-              then Just (reverse (c : acc))
-              else walk (max 0 (depth - 1)) False False (c : acc) cs
-        | otherwise = walk depth inStr False (c : acc) cs
-   in fmap (T.cons open . T.pack) (walk (1 :: Int) False False [] rest)
+      walk [] _ _ _ _ = Nothing
+      walk stack@(expected : restStack) inStr esc acc (c : cs)
+        | esc = walk stack True False (c : acc) cs
+        | c == '\\' && inStr = walk stack True True (c : acc) cs
+        | c == '"' = walk stack (not inStr) False (c : acc) cs
+        | inStr = walk stack True False (c : acc) cs
+        | c == '{' = walk ('}' : stack) False False (c : acc) cs
+        | c == '[' = walk (']' : stack) False False (c : acc) cs
+        | c == '}' || c == ']' =
+            if c == expected
+              then if null restStack
+                     then Just (reverse (c : acc))
+                     else walk restStack False False (c : acc) cs
+              else Nothing
+        | otherwise = walk stack False False (c : acc) cs
+   in fmap (T.cons open . T.pack) (walk initialStack False False [] rest)
 
 --------------------------------------------------------------------------------
 -- Primitive literal scanner

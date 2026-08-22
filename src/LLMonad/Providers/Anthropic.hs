@@ -147,12 +147,10 @@ buildMessagesBody cfg req = object $ concat
     systemText = fmap (\base -> maybe base (\d -> base <> "\n\n" <> d) directive) (crSystem req)
 
     forcedSchema = case rf of
-      RfJsonSchema n s _ -> Just (n, s)
+      RfJsonSchema _n s _ -> Just (structuredToolName, s)
       _ -> Nothing
 
-    forcedName = case forcedSchema of
-      Just (n, _) -> n
-      Nothing -> structuredToolName
+    forcedName = structuredToolName
 
     userTools =
       [ object
@@ -239,6 +237,7 @@ parseMessagesResponse body = do
   resp <- eitherDecodeLenient body
   let blocks = antContent resp
       texts = [t | b <- blocks, Just t <- [antBlockText b]]
+      isSynthetic b = antBlockName b == Just structuredToolName
       calls =
         [ ToolCall
             { toolCallId = fromMaybe "" (antBlockId b)
@@ -247,11 +246,14 @@ parseMessagesResponse body = do
             }
         | b <- blocks
         , antBlockType b == Just "tool_use"
+        , not (isSynthetic b)
         ]
       -- Structured output arrives inside the forced tool_use block.
-      structuredPayload = case [inp | b <- blocks, antBlockType b == Just "tool_use", Just inp <- [antBlockInput b]] of
+      structuredPayload = case [inp | b <- blocks, antBlockType b == Just "tool_use", isSynthetic b, Just inp <- [antBlockInput b]] of
         (inp : _) -> Just inp
         [] -> Nothing
+      rawStop = maybe FrStop stopFromText (antStopReason resp)
+      finishReason = if null calls && rawStop == FrToolUse then FrStop else rawStop
   if null blocks
     then Left NoAssistantMessage
     else
@@ -260,7 +262,7 @@ parseMessagesResponse body = do
           { crspText = T.concat texts
           , crspToolCalls = calls
           , crspStructuredPayload = structuredPayload
-          , crspFinishReason = maybe FrStop stopFromText (antStopReason resp)
+          , crspFinishReason = finishReason
           , crspUsage = fmap convUsage (antUsage resp)
           }
   where
@@ -403,6 +405,7 @@ finalizeAnthropicStream st = case asError st of
     | otherwise ->
         let ordered = [b | (_, b) <- IM.toAscList (asBlocks st)]
             texts = [t | AntTextAcc t <- ordered, not (T.null t)]
+            isSynthetic mn = mn == Just structuredToolName
             calls =
               [ ToolCall
                   { toolCallId = fromMaybe "" mid
@@ -410,16 +413,19 @@ finalizeAnthropicStream st = case asError st of
                   , toolCallArguments = fromMaybe Null (parseJsonText pj)
                   }
               | AntToolAcc mid mn pj <- ordered
+              , not (isSynthetic mn)
               ]
-            structuredPayload = case [v | AntToolAcc _ _ pj <- ordered, Just v <- [parseJsonText pj]] of
+            structuredPayload = case [v | AntToolAcc _ mn pj <- ordered, isSynthetic mn, Just v <- [parseJsonText pj]] of
               (v : _) -> Just v
               [] -> Nothing
+            rawStop = fromMaybe FrStop (asStop st)
+            finishReason = if null calls && rawStop == FrToolUse then FrStop else rawStop
          in Right
               CompletionResponse
                 { crspText = T.concat texts
                 , crspToolCalls = calls
                 , crspStructuredPayload = structuredPayload
-                , crspFinishReason = fromMaybe FrStop (asStop st)
+                , crspFinishReason = finishReason
                 , crspUsage = Just (Usage (asInputTokens st) (asOutputTokens st))
                 }
   where

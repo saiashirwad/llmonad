@@ -40,11 +40,12 @@ module LLMonad.Tools
 
 import Control.Exception (throwIO)
 import Control.Monad (when)
-import Data.Aeson (FromJSON, Key, Object, ToJSON (..), Value (..), eitherDecode', encode, object, (.=))
-import Data.Aeson.Types (Parser, (.:?))
+import Data.Aeson (FromJSON, Key, Object, ToJSON (..), Value (..), encode, object, parseJSON, (.=))
+import Data.Aeson.Types (Parser, (.:?), parseEither)
 import qualified Data.ByteString.Lazy as LBS
 import Data.List (find, intercalate)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
 import Effectful
@@ -52,6 +53,7 @@ import LLMonad.Core
   ( LLM
   , chatRound
   , pushMessage
+  , withTransaction
   )
 import LLMonad.Error (LLMError (..))
 import LLMonad.Schema (ToSchema (..))
@@ -149,24 +151,9 @@ tool' name desc run =
           , toolSpecParameters = toSchema @a
           }
     , toolRun = \val ->
-        let parsed = case eitherDecode' (encode val) of
-              Right parsed' -> Right parsed'
-              Left err -> case val of
-                Object _ -> case eitherDecode' "[]" of
-                  Right p -> Right p
-                  Left _ -> Left err
-                Array _ -> case eitherDecode' "{}" of
-                  Right p -> Right p
-                  Left _ -> Left err
-                Null -> case eitherDecode' "[]" of
-                  Right p -> Right p
-                  Left _ -> case eitherDecode' "{}" of
-                    Right p -> Right p
-                    Left _ -> Left err
-                _ -> Left err
-         in case parsed of
-              Left err -> pure (Left ("invalid arguments: " <> decodeUtf8With lenientDecode (LBS.toStrict (encode err))))
-              Right parsed' -> run parsed'
+        case parseEither parseJSON val of
+          Left err -> pure (Left ("invalid arguments: " <> T.pack err))
+          Right parsed' -> run parsed'
     }
 
 -- | Lift an IO-based tool into an Effectful environment.
@@ -199,7 +186,7 @@ useTools = useToolsWith defaultAgentOpts
 
 -- | 'useTools' with explicit options.
 useToolsWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
-useToolsWith opts tools instruction = do
+useToolsWith opts tools instruction = withTransaction $ do
   pushMessage (UserMsg instruction)
   loop (agentMaxRounds opts) []
   where
@@ -215,9 +202,9 @@ useToolsWith opts tools instruction = do
               | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
               | otherwise -> do
                   let currentSignatures = [(toolCallName c, toolCallArguments c) | c <- calls]
+                  mapM_ executeAndRecord calls
                   when (currentSignatures == prevSignatures && not (null currentSignatures)) $ do
                     pushMessage (UserMsg "Warning: Repeated identical tool call signature detected. Please adjust your plan or return the final answer.")
-                  mapM_ executeAndRecord calls
                   loop (roundsLeft - 1) currentSignatures
 
     executeAndRecord call = do

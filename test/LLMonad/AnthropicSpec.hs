@@ -64,7 +64,7 @@ spec = do
     it "forces the structured-output tool for json_schema requests" $ do
       let body = buildMessagesBody cfg schemaReq
       at ["tool_choice", "type"] body `shouldBe` Just (String "tool")
-      at ["tool_choice", "name"] body `shouldBe` Just (String "Answer")
+      at ["tool_choice", "name"] body `shouldBe` Just (String "__llmonad_structured_output")
       case at ["tools"] body of
         Just (Array ts) -> length ts `shouldBe` 1
         other -> expectationFailure ("expected one tool, got: " <> show other)
@@ -105,12 +105,21 @@ spec = do
           crspUsage resp `shouldBe` Just (Usage 3 4)
         Left e -> expectationFailure (show e)
 
-    it "surfaces tool_use input as the structured payload" $ do
-      let raw = "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"Answer\",\"input\":{\"q\":\"hi\"}}],\"stop_reason\":\"tool_use\"}"
+    it "surfaces synthetic tool_use input as the structured payload and isolates from crspToolCalls" $ do
+      let raw = "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"__llmonad_structured_output\",\"input\":{\"q\":\"hi\"}}],\"stop_reason\":\"tool_use\"}"
       case parseMessagesResponse (lbs raw) of
         Right resp -> do
-          length (crspToolCalls resp) `shouldBe` 1
+          crspToolCalls resp `shouldBe` []
           crspStructuredPayload resp `shouldBe` Just (object [(Key.fromText "q", String "hi")])
+          crspFinishReason resp `shouldBe` FrStop
+        Left e -> expectationFailure (show e)
+
+    it "preserves user tool calls in crspToolCalls and leaves structuredPayload as Nothing" $ do
+      let raw = "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tu_2\",\"name\":\"calculator\",\"input\":{\"a\":1}}],\"stop_reason\":\"tool_use\"}"
+      case parseMessagesResponse (lbs raw) of
+        Right resp -> do
+          crspToolCalls resp `shouldBe` [ToolCall "tu_2" "calculator" (object [(Key.fromText "a", Number 1)])]
+          crspStructuredPayload resp `shouldBe` Nothing
           crspFinishReason resp `shouldBe` FrToolUse
         Left e -> expectationFailure (show e)
 
@@ -136,17 +145,35 @@ spec = do
           crspFinishReason resp `shouldBe` FrStop
         Left e -> expectationFailure (show e)
 
-    it "reassembles streamed tool arguments from partial JSON" $ do
+    it "reassembles streamed synthetic tool arguments from partial JSON without polluting crspToolCalls" $ do
       let events =
-            [ "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"Answer\"}}"
+            [ "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"__llmonad_structured_output\"}}"
             , "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\": \"}}"
             , "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"hey\\\"}\"}}"
             , "{\"type\":\"message_stop\"}"
             ]
           st = foldl (\s e -> fst (handleAnthropicEvent s e)) initialAntStreamState events
       case finalizeAnt st of
-        Right resp ->
+        Right resp -> do
+          crspToolCalls resp `shouldBe` []
           crspStructuredPayload resp `shouldBe` Just (object [(Key.fromText "q", String "hey")])
+          crspFinishReason resp `shouldBe` FrStop
+        Left e -> expectationFailure (show e)
+
+    it "reassembles streamed user tool arguments in crspToolCalls" $ do
+      let events =
+            [ "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"calc\"}}"
+            , "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\": \"}}"
+            , "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"hey\\\"}\"}}"
+            , "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}"
+            , "{\"type\":\"message_stop\"}"
+            ]
+          st = foldl (\s e -> fst (handleAnthropicEvent s e)) initialAntStreamState events
+      case finalizeAnt st of
+        Right resp -> do
+          crspToolCalls resp `shouldBe` [ToolCall "tu_1" "calc" (object [(Key.fromText "q", String "hey")])]
+          crspStructuredPayload resp `shouldBe` Nothing
+          crspFinishReason resp `shouldBe` FrToolUse
         Left e -> expectationFailure (show e)
 
     it "rejects truncated stream ending abruptly without message_stop or stop_reason" $ do
