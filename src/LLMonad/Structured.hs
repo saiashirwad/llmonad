@@ -24,7 +24,7 @@ import LLMonad.Types
 
 -- | Ask the model for structured output conforming to ToSchema.
 askStructured :: forall a es. (LLM :> es, FromJSON a, ToSchema a) => Text -> Eff es a
-askStructured prompt = do
+askStructured prompt = withTransaction $ do
   pushMessage (UserMsg prompt)
   resp <- chatRound defaultParams (RfJsonSchema (schemaTypeName @a) (toSchema @a) True) [] ToolAuto
   case crspStructuredPayload resp of
@@ -37,7 +37,7 @@ askStructured prompt = do
 
 -- | Extract structured output with self-correcting error recovery retry loop.
 extractWithRetry :: forall a es. (LLM :> es, FromJSON a, ToSchema a) => Int -> Text -> Eff es a
-extractWithRetry maxTries initialPrompt = do
+extractWithRetry maxTries initialPrompt = withTransaction $ do
   pushMessage (UserMsg initialPrompt)
   loop maxTries
   where

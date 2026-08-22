@@ -10,6 +10,7 @@
 -- | Live HTTP interpreter for the LLM effect.
 module LLMonad.Interpreter.HTTP
   ( LLMConfig (..)
+  , HTTPState (..)
   , defaultConfig
   , runLLMHTTP
   , runLLMHTTPWithState

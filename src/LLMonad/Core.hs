@@ -39,8 +39,10 @@ module LLMonad.Core
   , prettyError
   , attempt
   , retry
+  , withTransaction
   ) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (throw)
 import Data.Aeson (ToJSON (..), encode)
 import qualified Data.ByteString.Lazy as LBS
@@ -48,6 +50,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (decodeUtf8With)
 import Data.Text.Encoding.Error (lenientDecode)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import qualified Effectful.Exception as E
@@ -104,13 +107,20 @@ setSystem sys = send (SetSystem sys)
 clearSystem :: (LLM :> es) => Eff es ()
 clearSystem = send ClearSystem
 
+-- | Execute an action transactionally against the conversation history.
+-- Snapshots history before running the action and restores it if an exception occurs.
+withTransaction :: (LLM :> es) => Eff es a -> Eff es a
+withTransaction act = do
+  priorHist <- getHistory
+  act `E.onException` setHistory priorHist
+
 -- | Send a user prompt and return the assistant reply text.
 generateText :: (LLM :> es) => Text -> Eff es Text
 generateText = generateTextWith defaultParams
 
 -- | Send a user prompt with explicit parameters and return the assistant reply text.
 generateTextWith :: (LLM :> es) => Params -> Text -> Eff es Text
-generateTextWith params prompt = do
+generateTextWith params prompt = withTransaction $ do
   pushMessage (UserMsg prompt)
   resp <- chatRound params RfText [] ToolAuto
   pure (crspText resp)
@@ -121,7 +131,7 @@ streamText = streamTextWith defaultParams
 
 -- | Stream assistant reply tokens with explicit parameters.
 streamTextWith :: (LLM :> es) => Params -> (Text -> IO ()) -> Text -> Eff es Text
-streamTextWith params cb prompt = do
+streamTextWith params cb prompt = withTransaction $ do
   pushMessage (UserMsg prompt)
   resp <- streamRound params RfText [] forward
   pure (crspText resp)
@@ -142,12 +152,39 @@ embedShow = T.pack . show
 attempt :: Eff es a -> Eff es (Either LLMError a)
 attempt = E.try
 
--- | Retry an action up to N times on transient errors.
-retry :: Int -> Eff es a -> Eff es a
-retry maxAttempts act = go maxAttempts
+-- | Retry an action up to N times on transient errors with exponential backoff and randomized jitter.
+retry :: (IOE :> es) => Int -> Eff es a -> Eff es a
+retry maxAttempts act = go 1
   where
-    go n
-      | n <= 1 = act
+    initialBackoffMicros :: Int
+    initialBackoffMicros = 100000 -- 100ms
+
+    maxBackoffMicros :: Int
+    maxBackoffMicros = 10000000   -- 10s
+
+    go attemptNum
+      | attemptNum >= maxAttempts = act
       | otherwise = act `E.catch` \case
-          err | isTransient err -> go (n - 1)
+          err | isTransient err -> do
+            delayBackoff err attemptNum
+            go (attemptNum + 1)
           other -> throw other
+
+    delayBackoff err attemptNum = do
+      delayMicros <- liftIO $ case err of
+        RateLimitError _ _ (Just retryAfterSecs) -> do
+          let base = retryAfterSecs * 1000000
+          addJitter base
+        _ -> do
+          let exponentVal = min 20 (attemptNum - 1)
+              base = min maxBackoffMicros (initialBackoffMicros * (2 ^ exponentVal))
+          addJitter base
+      liftIO (threadDelay delayMicros)
+
+    addJitter :: Int -> IO Int
+    addJitter base = do
+      now <- getPOSIXTime
+      let nanos = round (now * 1000000000) :: Integer
+          randPercent = 80 + fromIntegral (nanos `mod` 41) :: Double
+          jittered = round (fromIntegral base * (randPercent / 100.0)) :: Int
+      pure (max 1000 jittered)

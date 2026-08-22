@@ -116,7 +116,7 @@ spec = do
         [r] -> crSystem r `shouldBe` Nothing
         other -> expectationFailure ("expected 1 request, got: " <> show (length other))
 
-    it "attempt catches LLMError and preserves conversation history before error" $ do
+    it "attempt catches LLMError and rolls back uncommitted turn from conversation history" $ do
       (_, hist, _, _) <-
         runScript
           [ Left (ApiError 500 "server down")
@@ -127,8 +127,7 @@ spec = do
               generateText "second try"
           )
       hist `shouldBe`
-        [ UserMsg "first try"
-        , UserMsg "second try"
+        [ UserMsg "second try"
         , AssistantMsg "recovered" []
         ]
 

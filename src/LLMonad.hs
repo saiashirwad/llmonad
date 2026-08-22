@@ -40,6 +40,8 @@ module LLMonad
 
     -- * Middleware
   , withCache
+  , withCacheModel
+  , isCacheableResponse
   , CacheStore (..)
   , newInMemoryCache
   , withTrace
@@ -78,6 +80,7 @@ module LLMonad
   , prettyError
   , attempt
   , retry
+  , withTransaction
 
     -- * Prompt Helpers & Message Algebra
   , embed

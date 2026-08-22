@@ -27,6 +27,7 @@ module LLMonad.Subagent
   ) where
 
 import Control.Concurrent.Async (Async, async)
+import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Exception (SomeException)
 import Data.Aeson
   ( FromJSON (..)
@@ -36,15 +37,19 @@ import Data.Aeson
   , (.:)
   , (.:?)
   )
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful
+import Effectful.Dispatch.Dynamic (EffectHandler, interpose, send)
 import qualified Effectful.Exception as EE
 import GHC.Generics (Generic)
 import LLMonad.Agent (runAgentWith)
-import LLMonad.Core (LLM)
+import LLMonad.Core (LLM (..))
 import LLMonad.Error (LLMError (..), prettyError)
+import LLMonad.Interpreter.HTTP (HTTPState (..))
+import System.IO.Unsafe (unsafePerformIO)
 import LLMonad.Journal
   ( Journal
   , JournalEvent (..)
@@ -147,13 +152,85 @@ filterSubagentTools args allTools =
         Nothing      -> roleFiltered
    in whitelistFiltered
 
+-- | Global lock to serialize turn execution against shared LLM providers while preserving state isolation.
+subagentTurnLock :: MVar ()
+subagentTurnLock = unsafePerformIO (newMVar ())
+{-# NOINLINE subagentTurnLock #-}
+
+-- | Execute a subagent computation with an isolated conversation state store.
+-- Internal prompts, intermediate reasoning, and tool calls are retained in the child state
+-- and do not pollute the parent conversation history.
+withIsolatedLLM :: (LLM :> es, IOE :> es) => Eff es a -> Eff es a
+withIsolatedLLM action = do
+  childStateRef <- liftIO (newIORef (HTTPState Nothing []))
+  interpose (isolatedLLMHandler childStateRef) action
+
+isolatedLLMHandler ::
+  (LLM :> es, IOE :> es) =>
+  IORef HTTPState ->
+  EffectHandler LLM es
+isolatedLLMHandler childStateRef _ = \case
+  GetHistory -> liftIO (hsHistory <$> readIORef childStateRef)
+  SetHistory msgs -> liftIO (modifyIORef' childStateRef (\s -> s { hsHistory = msgs }))
+  PushMessage msg -> liftIO (modifyIORef' childStateRef (\s -> s { hsHistory = hsHistory s ++ [msg] }))
+  ClearHistory -> liftIO (modifyIORef' childStateRef (\s -> s { hsHistory = [] }))
+  GetSystem -> liftIO (hsSystem <$> readIORef childStateRef)
+  SetSystem sys -> liftIO (modifyIORef' childStateRef (\s -> s { hsSystem = Just sys }))
+  ClearSystem -> liftIO (modifyIORef' childStateRef (\s -> s { hsSystem = Nothing }))
+
+  ChatRound callParams fmt specs choice -> do
+    HTTPState childSys childHist <- liftIO (readIORef childStateRef)
+    EE.bracket_ (liftIO (takeMVar subagentTurnLock)) (liftIO (putMVar subagentTurnLock ())) $ do
+      parentHist <- send GetHistory
+      parentSys <- send GetSystem
+      send (SetHistory childHist)
+      case childSys of
+        Just cs -> send (SetSystem cs)
+        Nothing -> send ClearSystem
+      resp <- (send (ChatRound callParams fmt specs choice)) `EE.onException` do
+        send (SetHistory parentHist)
+        case parentSys of
+          Just ps -> send (SetSystem ps)
+          Nothing -> send ClearSystem
+      updatedHist <- send GetHistory
+      let newMsgs = drop (length childHist) updatedHist
+      liftIO (modifyIORef' childStateRef (\s -> s { hsHistory = hsHistory s ++ newMsgs }))
+      send (SetHistory parentHist)
+      case parentSys of
+        Just ps -> send (SetSystem ps)
+        Nothing -> send ClearSystem
+      pure resp
+
+  StreamRound callParams fmt specs cb -> do
+    HTTPState childSys childHist <- liftIO (readIORef childStateRef)
+    EE.bracket_ (liftIO (takeMVar subagentTurnLock)) (liftIO (putMVar subagentTurnLock ())) $ do
+      parentHist <- send GetHistory
+      parentSys <- send GetSystem
+      send (SetHistory childHist)
+      case childSys of
+        Just cs -> send (SetSystem cs)
+        Nothing -> send ClearSystem
+      resp <- (send (StreamRound callParams fmt specs cb)) `EE.onException` do
+        send (SetHistory parentHist)
+        case parentSys of
+          Just ps -> send (SetSystem ps)
+          Nothing -> send ClearSystem
+      updatedHist <- send GetHistory
+      let newMsgs = drop (length childHist) updatedHist
+      liftIO (modifyIORef' childStateRef (\s -> s { hsHistory = hsHistory s ++ newMsgs }))
+      send (SetHistory parentHist)
+      case parentSys of
+        Just ps -> send (SetSystem ps)
+        Nothing -> send ClearSystem
+      pure resp
+
 -- | Run a child subagent synchronously.
 runSubagent ::
   (World :> es, Journal :> es, LLM :> es, IOE :> es) =>
   SubagentArgs ->
   [Tool (Eff es)] ->
   Eff es SubagentResult
-runSubagent args parentTools = do
+runSubagent args parentTools = withIsolatedLLM $ do
   recordEvent (ToolInvoked "subagent" (toJSON args))
   let childTools = filterSubagentTools args parentTools
   let maxR = max 1 (fromMaybe 8 (maxRounds args))

@@ -264,11 +264,10 @@ spec = do
       case res of
         Left (ApiError 500 _) -> pure ()
         other -> expectationFailure ("Expected ApiError 500, got: " <> show other)
-      -- History should contain Step 1, First OK, and Step 2
+      -- History should contain Step 1 and First OK (uncommitted Step 2 rolled back)
       hist `shouldBe`
         [ UserMsg "Step 1"
         , AssistantMsg "First OK" []
-        , UserMsg "Step 2"
         ]
 
   describe "Challenger Adversarial Suite: Cache Key Discrimination & Tool Spec Collisions" $ do

@@ -28,6 +28,8 @@ import qualified LLMonad.TUIAdversarialSpec
 import qualified LLMonad.WorldSpec
 import qualified LLMonad.WorldAdversarialSpec
 import qualified LLMonad.E2ESpec
+import qualified LLMonad.Batch1AdversarialSpec
+import qualified LLMonad.Batch2AdversarialSpec
 import Test.Hspec
 
 main :: IO ()
@@ -58,6 +60,8 @@ main = hspec $ do
   describe "Brick + Vty Interactive TUI (R4 / Milestone 4)" LLMonad.TUISpec.spec
   describe "Brick + Vty Interactive TUI Adversarial Suite (M4)" LLMonad.TUIAdversarialSpec.spec
   describe "E2E Master Suite (Milestone 5 / Tiers 1-5)" LLMonad.E2ESpec.spec
+  describe "Batch 1 Challenger Adversarial Suite" LLMonad.Batch1AdversarialSpec.spec
+  describe "Batch 2 Adversarial Suite" LLMonad.Batch2AdversarialSpec.spec
 
 
 
