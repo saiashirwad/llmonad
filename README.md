@@ -152,8 +152,8 @@ The `Journal` effect provides event sourcing for agent conversations, enabling p
 data JournalEvent
   = TurnStarted !Text
   | UserMsg !Text
-  | ModelTurn !Text
-  | ToolInvoked !Text !Value
+  | ModelTurn !Text ![ToolCall]
+  | ToolInvoked !Text !Text !Value
   | ToolCompleted !Text !ToolResult
   | MetricsReported !ModelMetrics
   | TurnFinished !Text

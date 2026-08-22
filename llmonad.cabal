@@ -89,27 +89,27 @@ library
         base >= 4.16 && < 5,
         effectful-core >= 2.5 && < 2.7,
         effectful >= 2.5 && < 2.7,
-        aeson >= 2.0 && < 3.0,
+        aeson >= 2.0 && < 3,
         bytestring >= 0.10 && < 0.13,
         text >= 1.2 && < 2.2,
         http-client >= 0.7 && < 0.9,
         http-client-tls >= 0.3 && < 0.4,
         http-types >= 0.12 && < 0.13,
-        template-haskell >= 2.19 && < 2.22,
+        template-haskell >= 2.19 && < 2.24,
         containers >= 0.6 && < 0.8,
         unordered-containers >= 0.2 && < 0.3,
         vector >= 0.12 && < 0.14,
         scientific >= 0.3 && < 0.4,
         case-insensitive >= 1.2 && < 1.3,
-        time >= 1.9 && < 2.0,
+        time >= 1.9 && < 2,
         directory >= 1.3.6 && < 1.4,
         filepath >= 1.4 && < 1.6,
         process >= 1.6 && < 1.7,
         temporary >= 1.3 && < 1.4,
         async >= 2.2 && < 2.3,
         stm >= 2.5 && < 2.6,
-        brick >= 2.0 && < 3.0,
-        vty >= 6.0 && < 7.0,
+        brick >= 2.0 && < 3,
+        vty >= 6.0 && < 7,
         vty-unix >= 0.1 && < 0.3,
         vty-crossplatform >= 0.1 && < 0.3,
         Diff >= 0.4 && < 1.1
@@ -124,7 +124,7 @@ executable llmonad
         llmonad,
         effectful-core >= 2.5 && < 2.7,
         effectful >= 2.5 && < 2.7,
-        aeson >= 2.0 && < 3.0,
+        aeson >= 2.0 && < 3,
         text >= 1.2 && < 2.2,
         bytestring >= 0.10 && < 0.13,
         containers >= 0.6 && < 0.8
@@ -139,14 +139,14 @@ executable llmonad-tui
         llmonad,
         effectful-core >= 2.5 && < 2.7,
         effectful >= 2.5 && < 2.7,
-        aeson >= 2.0 && < 3.0,
+        aeson >= 2.0 && < 3,
         text >= 1.2 && < 2.2,
         bytestring >= 0.10 && < 0.13,
         containers >= 0.6 && < 0.8,
         directory >= 1.3.6 && < 1.4,
         filepath >= 1.4 && < 1.6,
-        brick >= 2.0 && < 3.0,
-        vty >= 6.0 && < 7.0,
+        brick >= 2.0 && < 3,
+        vty >= 6.0 && < 7,
         vty-crossplatform >= 0.1 && < 0.3,
         async >= 2.2 && < 2.3
     hs-source-dirs:   app
@@ -180,6 +180,7 @@ test-suite llmonad-test
         LLMonad.WorldSpec
         LLMonad.WorldAdversarialSpec
         LLMonad.JournalSpec
+        LLMonad.ReplaySpec
         LLMonad.CodingToolsSpec
         LLMonad.SubagentSpec
         LLMonad.CodingToolsAdversarialSpec
@@ -196,19 +197,22 @@ test-suite llmonad-test
         LLMonad.Batch4AdversarialSpec
         LLMonad.Batch4ChallengerSpec
         LLMonad.Batch4ChallengerStressSpec
+        LLMonad.Batch5AdversarialSpec
+        LLMonad.Batch5ChallengerSpec
+        LLMonad.Batch5ChallengerStressSpec
         LLMonad.Mock
     build-depends:
         base >= 4.16 && < 5,
         llmonad,
         effectful-core >= 2.5 && < 2.7,
         effectful >= 2.5 && < 2.7,
-        aeson >= 2.0 && < 3.0,
+        aeson >= 2.0 && < 3,
         text >= 1.2 && < 2.2,
         bytestring >= 0.10 && < 0.13,
         containers >= 0.6 && < 0.8,
         vector >= 0.12 && < 0.14,
         scientific >= 0.3 && < 0.4,
-        time >= 1.9 && < 2.0,
+        time >= 1.9 && < 2,
         directory >= 1.3.6 && < 1.4,
         filepath >= 1.4 && < 1.6,
         process >= 1.6 && < 1.7,
@@ -216,8 +220,8 @@ test-suite llmonad-test
         async >= 2.2 && < 2.3,
         http-client >= 0.7 && < 0.9,
         case-insensitive >= 1.2 && < 1.3,
-        brick >= 2.0 && < 3.0,
-        vty >= 6.0 && < 7.0,
+        brick >= 2.0 && < 3,
+        vty >= 6.0 && < 7,
         hspec >= 2.10 && < 2.12,
         hspec-core >= 2.10 && < 2.12,
         QuickCheck >= 2.14 && < 2.16

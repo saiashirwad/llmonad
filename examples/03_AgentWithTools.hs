@@ -39,7 +39,7 @@ data PortfolioValuation = PortfolioValuation
   deriving (Show, Eq, Generic, FromJSON, ToJSON, ToSchema)
 
 -- | IO tool looking up stock prices
-stockPriceTool :: Tool
+stockPriceTool :: Tool (Eff es)
 stockPriceTool = mkTool "stock_price" "Look up current stock price in USD for a given ticker" $ \(args :: StockPriceArgs) -> do
   pure $ case T.toUpper (ticker args) of
     "AAPL" -> (225.50 :: Double)
@@ -48,12 +48,12 @@ stockPriceTool = mkTool "stock_price" "Look up current stock price in USD for a 
     _ -> 100.00
 
 -- | Pure tool converting currency
-currencyConversionTool :: Tool
+currencyConversionTool :: Tool (Eff es)
 currencyConversionTool = toolSync "convert_currency" "Convert amount between currencies" $ \(args :: ConversionArgs) ->
   let rate = if fromCurrency args == "USD" && toCurrency args == "EUR" then 0.92 else 1.0
    in amount args * rate
 
-tools :: [Tool]
+tools :: [Tool (Eff es)]
 tools = [stockPriceTool, currencyConversionTool]
 
 workflow :: (LLM :> es, IOE :> es) => Eff es ()

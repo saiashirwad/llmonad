@@ -333,3 +333,68 @@ spec = describe "Brick + Vty Interactive TUI Adversarial Suite (Milestone 4)" $ 
             }
       let widgets = drawUI st
       length widgets `shouldBe` 1
+
+  describe "6. Adversarial Session Resume & State Hydration" $ do
+    it "hydrates 300 sequential turns without state corruption or dropped messages" $ do
+      let mkTurn i =
+            let tid = "turn-" <> T.pack (show i)
+                callId = "call-" <> T.pack (show i)
+                p = "Instruction " <> T.pack (show i)
+                resp = "Response " <> T.pack (show i)
+            in [ TurnStarted tid
+               , JournalUserMsg p
+               , ModelTurn ("Calling tool " <> T.pack (show i)) [ToolCall callId "viewFile" "{\"filePath\":\"a.hs\"}"]
+               , ToolInvoked callId "viewFile" (Aeson.object ["filePath" Aeson..= ("a.hs" :: Text)])
+               , ToolCompleted callId (Right (Aeson.object ["content" Aeson..= ("module A" :: Text)]))
+               , ModelTurn resp []
+               , MetricsReported (ModelMetrics 10 20 30 15.0 "deepseek-chat")
+               , TurnFinished tid
+               ]
+      let events = concatMap mkTurn [1..300 :: Int]
+      let st0 = initialAppState defaultTUIConfig Nothing
+      let stHydrated = hydrateAppStateFromEvents events st0
+
+      -- 300 turns * 4 messages per turn (UserMsg, AssistantMsg with ToolCall, ToolMsg, AssistantMsg) = 1200 messages
+      length (appMessages stHydrated) `shouldBe` 1200
+      length (appToolLogs stHydrated) `shouldBe` 300
+      amTurnCount (appMetrics stHydrated) `shouldBe` 300
+      amTotalTokens (appMetrics stHydrated) `shouldBe` 9000
+      appStatus stHydrated `shouldBe` StatusIdle
+      T.isInfixOf "1200 messages loaded" (appStatusMessage stHydrated) `shouldBe` True
+
+    it "handles uncompleted (in-flight) tool invocations without crashing" $ do
+      let events =
+            [ TurnStarted "turn-1"
+            , JournalUserMsg "Run long task"
+            , ModelTurn "Running..." [ToolCall "c1" "runCommand" "{}"]
+            , ToolInvoked "c1" "runCommand" (Aeson.object ["cmd" Aeson..= ("sleep 100" :: Text)])
+            ]
+      let st0 = initialAppState defaultTUIConfig Nothing
+      let stHydrated = hydrateAppStateFromEvents events st0
+      case appToolLogs stHydrated of
+        [entry] -> do
+          tleResult entry `shouldBe` Nothing
+          tleTimestamp entry `shouldBe` "replayed"
+        _ -> expectationFailure "Expected exactly 1 tool log entry"
+
+    it "extracts latest visual diff across mixed key conventions in replayed events" $ do
+      let diff1 = "@@ -1 +1 @@\n-v1\n+v2" :: Text
+          diff2 = "@@ -1 +1 @@\n-v2\n+v3" :: Text
+          events =
+            [ TurnStarted "turn-1"
+            , JournalUserMsg "Edit 1"
+            , ToolInvoked "c1" "editFile" (Aeson.object [])
+            , ToolCompleted "c1" (Right (Aeson.object ["diffSnippet" Aeson..= diff1]))
+            , TurnFinished "turn-1"
+            , TurnStarted "turn-2"
+            , JournalUserMsg "Edit 2"
+            , ToolInvoked "c2" "editFile" (Aeson.object [])
+            , ToolCompleted "c2" (Right (Aeson.object ["efrDiffSnippet" Aeson..= diff2, "efrPath" Aeson..= ("src/Lib.hs" :: Text)]))
+            , TurnFinished "turn-2"
+            ]
+      let st = hydrateAppStateFromEvents events (initialAppState defaultTUIConfig Nothing)
+      case appDiffState st of
+        Nothing -> expectationFailure "Expected diff state to be present"
+        Just ds -> do
+          vdsContent ds `shouldBe` diff2
+          vdsFileName ds `shouldBe` Just "editFile"

@@ -38,7 +38,7 @@ computeTax args = pure $ case T.toUpper (country args) of
 $(return [])
 
 -- Auto-generate a Tool using Template Haskell
-taxTool :: Tool
+taxTool :: ToolIO
 taxTool = $(makeTool 'computeTax)
 
 workflow :: (LLM :> es, IOE :> es) => Eff es ()
@@ -51,7 +51,7 @@ workflow = do
   liftIO (TIO.putStrLn ("Interpolated Prompt:\n" <> query <> "\n"))
 
   liftIO (putStrLn "--- 2. Autonomous Execution with makeTool Splice ---")
-  answer <- runAgent [taxTool] query
+  answer <- runAgent [liftTool taxTool] query
   liftIO (TIO.putStrLn ("Agent Answer:\n" <> answer))
 
 main :: IO ()

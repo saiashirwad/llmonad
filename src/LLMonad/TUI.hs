@@ -16,6 +16,8 @@ module LLMonad.TUI
   , TUIConfig (..)
   , defaultTUIConfig
   , initialAppState
+  , initialAppStateWithEvents
+  , hydrateAppStateFromEvents
 
     -- * Pure Event Handlers & State Transitions
   , handleCustomAppEvent
@@ -45,6 +47,8 @@ module LLMonad.TUI
   , runTUIApp
   , runTUIAppWithConfig
   , runAgentWorker
+  , runRealAgentWorker
+  , runDemoWorker
   ) where
 
 import Brick
@@ -98,6 +102,7 @@ import Brick.Widgets.Edit
   , renderEditor
   )
 import Control.Concurrent.Async (Async, async)
+import Control.Exception (SomeException, handle)
 import Control.Monad (void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value)
@@ -105,14 +110,26 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.Aeson.Text as AesonText
 import qualified Data.Algorithm.Diff as Diff
+import Data.List (foldl')
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
+import Effectful (runEff)
 import GHC.Generics (Generic)
 import qualified Graphics.Vty as Vty
 import qualified Graphics.Vty.CrossPlatform as VtyCross
-import LLMonad.Journal.Types (ToolResult)
-import LLMonad.Types (ChatMessage (..), ToolCall (..))
+import LLMonad.Agent (runAgent)
+import LLMonad.Interpreter.HTTP (defaultConfig, runLLMHTTP)
+import LLMonad.Journal.Replay (loadJournalFile, reconstructChatHistory, replayAuditSummary)
+import qualified LLMonad.Journal.Types as J
+import LLMonad.Journal.Types (ReplaySummary (..), ToolResult)
+import LLMonad.Providers.Anthropic (anthropicProvider)
+import LLMonad.Providers.OpenAICompatible (deepSeekProvider, ollamaProvider, openAIProvider, openRouterProvider)
+import LLMonad.Tools (Tool (..))
+import LLMonad.Tools.Coding (standardCodingTools)
+import LLMonad.Types (ChatMessage (..), Model (..), ToolCall (..), ToolSpec (..))
+import LLMonad.World.Local (runWorldLocal)
+import System.Environment (lookupEnv)
 
 -- | Brick viewport and widget resource identifiers.
 data ResourceName
@@ -235,6 +252,66 @@ initialAppState cfg mChan = AppState
   , appAgentThread     = Nothing
   }
 
+-- | Initialize 'AppState' hydrated from replayed session events.
+initialAppStateWithEvents :: TUIConfig -> Maybe (BChan CustomAppEvent) -> [J.JournalEvent] -> AppState
+initialAppStateWithEvents cfg mChan events =
+  hydrateAppStateFromEvents events (initialAppState cfg mChan)
+
+-- | Hydrate AppState from replayed JournalEvent sequence without dropped turns or duplication.
+hydrateAppStateFromEvents :: [J.JournalEvent] -> AppState -> AppState
+hydrateAppStateFromEvents events st
+  | null events = st
+  | otherwise =
+      let chatMsgs = reconstructChatHistory events
+          auditSummary = replayAuditSummary events
+          (replayedLogs, replayedDiff) = foldl' processEvent ([], Nothing) events
+          metrics = AppMetrics
+            { amPromptTokens     = rsPromptTokens auditSummary
+            , amCompletionTokens = rsCompletionTokens auditSummary
+            , amTotalTokens      = rsTotalTokens auditSummary
+            , amLatencyMs        = rsTotalLatencyMs auditSummary
+            , amTurnCount        = rsTotalTurns auditSummary
+            }
+          statusMsg = if null chatMsgs
+            then "Ready"
+            else "Session resumed (" <> T.pack (show (length chatMsgs)) <> " messages loaded)"
+      in st
+        { appMessages      = chatMsgs
+        , appToolLogs      = replayedLogs
+        , appDiffState     = case replayedDiff of
+            Just d  -> Just d
+            Nothing -> appDiffState st
+        , appMetrics       = metrics
+        , appStatus        = StatusIdle
+        , appStatusMessage = statusMsg
+        }
+  where
+    processEvent (logs, mDiff) = \case
+      J.ToolInvoked _callId name args ->
+        let entry = ToolLogEntry
+              { tleToolName  = name
+              , tleArguments = args
+              , tleResult    = Nothing
+              , tleTimestamp = "replayed"
+              }
+        in (logs ++ [entry], mDiff)
+
+      J.ToolCompleted _callId res ->
+        let newDiff = extractDiffFromToolResult res
+            updatedLogs = case reverse logs of
+              [] -> logs
+              (lastEntry : rest) ->
+                reverse (lastEntry { tleResult = Just res } : rest)
+            toolName = case reverse logs of
+              (e:_) -> Just (T.unpack (tleToolName e))
+              []    -> Nothing
+            updatedDiff = case newDiff of
+              Just d  -> Just (VisualDiffState d toolName)
+              Nothing -> mDiff
+        in (updatedLogs, updatedDiff)
+
+      _ -> (logs, mDiff)
+
 -- ============================================================================
 -- Pure Event Handlers
 -- ============================================================================
@@ -306,13 +383,15 @@ updateMatchingLog name res entry
   | otherwise = entry
 
 -- | Extract a diff snippet if present in tool result.
+-- Checks 'efrDiffSnippet' (from EditFileResult), 'diffSnippet', 'diff_snippet', and 'diff'.
 extractDiffFromToolResult :: ToolResult -> Maybe Text
 extractDiffFromToolResult (Right val) = case val of
-  Aeson.Object obj -> case KeyMap.lookup "diff" obj of
-    Just (Aeson.String d) -> Just d
-    _ -> case KeyMap.lookup "diffSnippet" obj of
-      Just (Aeson.String d) -> Just d
-      _ -> Nothing
+  Aeson.Object obj ->
+    let candidateKeys = ["efrDiffSnippet", "diffSnippet", "diff_snippet", "diff"]
+        checkKey k = case KeyMap.lookup k obj of
+          Just (Aeson.String d) | not (T.null d) -> Just d
+          _ -> Nothing
+    in foldr (\k acc -> case checkKey k of Just d -> Just d; Nothing -> acc) Nothing candidateKeys
   _ -> Nothing
 extractDiffFromToolResult (Left _) = Nothing
 
@@ -645,16 +724,71 @@ handleAppEvent brickEv = case brickEv of
 
   _ -> pure ()
 
--- | Worker thread simulating or executing agent actions and streaming back events.
+-- | Worker thread executing agent actions (or running in demo mode if demo mode requested or for offline testing) and streaming events to Brick.
 runAgentWorker :: BChan CustomAppEvent -> TUIConfig -> Text -> IO ()
-runAgentWorker chan _cfg promptText = do
+runAgentWorker chan cfg promptText = do
   writeBChan chan (AgentStateChanged "Thinking...")
+  mRealAgent <- lookupEnv "LLMONAD_REAL_AGENT"
+  mDemoMode <- lookupEnv "LLMONAD_DEMO_MODE"
+  let enableReal = case (mRealAgent, mDemoMode) of
+        (Just "1", _)      -> True
+        (Just "true", _)   -> True
+        (_, Just "0")      -> True
+        (_, Just "false")  -> True
+        _                  -> False
+  if enableReal
+    then runRealAgentWorker chan cfg promptText
+    else runDemoWorker chan cfg promptText
+
+-- | Demo agent worker providing deterministic simulation for UI testing.
+runDemoWorker :: BChan CustomAppEvent -> TUIConfig -> Text -> IO ()
+runDemoWorker chan _cfg promptText = do
   writeBChan chan (TokenStreamed ("I received your instruction: \"" <> promptText <> "\".\n\n"))
   writeBChan chan (TokenStreamed "Analyzing workspace and planning changes...\n")
   writeBChan chan (ToolStarted "listDir" (Aeson.object ["directoryPath" Aeson..= ("." :: Text)]))
   writeBChan chan (ToolFinished "listDir" (Right (Aeson.object ["entries" Aeson..= (["src", "app", "test"] :: [Text])])))
   writeBChan chan (TokenStreamed "Completed directory scan. Changes ready.\n")
   writeBChan chan TurnCompleted
+
+-- | Real agent worker connecting Brick event stream with live model and coding tools.
+runRealAgentWorker :: BChan CustomAppEvent -> TUIConfig -> Text -> IO ()
+runRealAgentWorker chan cfg promptText = do
+  handle (\(e :: SomeException) -> do
+    writeBChan chan (ErrorOccurred (T.pack (show e)))
+    writeBChan chan TurnCompleted) $ do
+      mAnthropicKey <- lookupEnv "ANTHROPIC_API_KEY"
+      mOpenAIKey <- lookupEnv "OPENAI_API_KEY"
+      mDeepSeekKey <- lookupEnv "DEEPSEEK_API_KEY"
+      mOpenRouterKey <- lookupEnv "OPENROUTER_API_KEY"
+      let model = cfgModelName cfg
+      let (provider, effectiveModel) = case (mAnthropicKey, mDeepSeekKey, mOpenRouterKey, mOpenAIKey) of
+            (Just k, _, _, _) | "claude" `T.isPrefixOf` model || T.null model ->
+              (anthropicProvider (T.pack k), if T.null model then "claude-3-5-sonnet-20241022" else model)
+            (_, Just k, _, _) | "deepseek" `T.isPrefixOf` model || T.null model ->
+              (deepSeekProvider (T.pack k), if T.null model then "deepseek-chat" else model)
+            (_, _, Just k, _) ->
+              (openRouterProvider (T.pack k), if T.null model then "anthropic/claude-3.5-sonnet" else model)
+            (_, _, _, Just k) ->
+              (openAIProvider (T.pack k), if T.null model then "gpt-4o" else model)
+            _ ->
+              (ollamaProvider "http://localhost:11434/v1", if T.null model then "llama3" else model)
+      let clientCfg = defaultConfig provider (Model effectiveModel)
+      let instrumentTool t = t
+            { toolRun = \val -> do
+                let tName = toolSpecName (toolSpec t)
+                liftIO (writeBChan chan (ToolStarted tName val))
+                res <- toolRun t val
+                liftIO (writeBChan chan (ToolFinished tName res))
+                pure res
+            }
+          instTools = map instrumentTool standardCodingTools
+      writeBChan chan (AgentStateChanged "Executing coding agent...")
+      ans <- runEff
+        . runLLMHTTP clientCfg
+        . runWorldLocal (cfgWorkspacePath cfg)
+        $ runAgent instTools promptText
+      writeBChan chan (TokenStreamed ans)
+      writeBChan chan TurnCompleted
 
 -- | Run the Brick TUI application with default configuration.
 runTUIApp :: IO ()
@@ -664,6 +798,13 @@ runTUIApp = runTUIAppWithConfig defaultTUIConfig
 runTUIAppWithConfig :: TUIConfig -> IO ()
 runTUIAppWithConfig cfg = do
   chan <- newBChan 100
-  let st = initialAppState cfg (Just chan)
+  initialEvents <- case cfgSessionFilePath cfg of
+    Just fp -> do
+      res <- runEff (loadJournalFile fp)
+      case res of
+        Right evs -> pure evs
+        Left _    -> pure []
+    Nothing -> pure []
+  let st = initialAppStateWithEvents cfg (Just chan) initialEvents
   vty <- VtyCross.mkVty Vty.defaultConfig
   void (customMain vty (VtyCross.mkVty Vty.defaultConfig) (Just chan) tuiApp st)

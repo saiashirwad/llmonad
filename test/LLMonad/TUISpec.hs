@@ -257,6 +257,14 @@ spec = describe "Brick + Vty Interactive TUI (Milestone 4)" $ do
       let res = Right (Aeson.object ["diffSnippet" Aeson..= ("-removed line" :: Text)])
       extractDiffFromToolResult res `shouldBe` Just "-removed line"
 
+    it "extracts diff from 'efrDiffSnippet' field in EditFileResult JSON tool result" $ do
+      let res = Right (Aeson.object ["efrDiffSnippet" Aeson..= ("@@ -1 +1 @@\n-old\n+new" :: Text), "efrPath" Aeson..= ("src/Main.hs" :: Text)])
+      extractDiffFromToolResult res `shouldBe` Just "@@ -1 +1 @@\n-old\n+new"
+
+    it "extracts diff from 'diff_snippet' field in JSON tool result" $ do
+      let res = Right (Aeson.object ["diff_snippet" Aeson..= ("+patched line" :: Text)])
+      extractDiffFromToolResult res `shouldBe` Just "+patched line"
+
     it "returns Nothing when tool result has no diff" $ do
       let res1 = Right (Aeson.object ["status" Aeson..= ("ok" :: Text)])
           res2 = Left "Error running tool"
@@ -288,3 +296,102 @@ spec = describe "Brick + Vty Interactive TUI (Milestone 4)" $ do
       toolLogAttr `shouldBe` Brick.attrName "toolLog"
       headerAttr `shouldBe` Brick.attrName "header"
       borderAttr `shouldBe` Brick.attrName "border"
+
+  describe "7. Session Resume & State Hydration (TUI-004)" $ do
+    it "hydrates empty event list without altering initial AppState" $ do
+      let st0 = initialAppState defaultTUIConfig Nothing
+          stHydrated = hydrateAppStateFromEvents [] st0
+      appMessages stHydrated `shouldBe` []
+      appToolLogs stHydrated `shouldBe` []
+      appDiffState stHydrated `shouldBe` Nothing
+      appStatusMessage stHydrated `shouldBe` "Ready"
+
+    it "hydrates multi-turn conversation with UserMsg, AssistantMsg, and ToolMsg into appMessages" $ do
+      let diffText = "--- a/src/App.hs\n+++ b/src/App.hs\n@@ -1 +1 @@\n-old\n+new"
+          events =
+            [ TurnStarted "turn-1"
+            , JournalUserMsg "Inspect project structure"
+            , ModelTurn "I will list the directory." [ToolCall "call-1" "listDir" "{\"directoryPath\":\".\"}"]
+            , ToolInvoked "call-1" "listDir" (Aeson.object ["directoryPath" Aeson..= ("." :: Text)])
+            , ToolCompleted "call-1" (Right (Aeson.object ["entries" Aeson..= (["src", "app"] :: [Text])]))
+            , ModelTurn "Directory scan complete." []
+            , MetricsReported (ModelMetrics 120 45 165 150.0 "deepseek-chat")
+            , TurnFinished "turn-1"
+            , TurnStarted "turn-2"
+            , JournalUserMsg "Edit src/App.hs"
+            , ModelTurn "Applying edit..." [ToolCall "call-2" "editFile" "{\"targetFile\":\"src/App.hs\"}"]
+            , ToolInvoked "call-2" "editFile" (Aeson.object ["targetFile" Aeson..= ("src/App.hs" :: Text)])
+            , ToolCompleted "call-2" (Right (Aeson.object ["efrDiffSnippet" Aeson..= diffText, "efrPath" Aeson..= ("src/App.hs" :: Text)]))
+            , ModelTurn "Edit applied successfully." []
+            , MetricsReported (ModelMetrics 200 80 280 210.0 "deepseek-chat")
+            , TurnFinished "turn-2"
+            ]
+          st0 = initialAppState defaultTUIConfig Nothing
+          stHydrated = hydrateAppStateFromEvents events st0
+
+      length (appMessages stHydrated) `shouldBe` 8
+      appMessages stHydrated `shouldBe`
+        [ UserMsg "Inspect project structure"
+        , AssistantMsg "I will list the directory." [ToolCall "call-1" "listDir" "{\"directoryPath\":\".\"}"]
+        , ToolMsg "call-1" "{\"entries\":[\"src\",\"app\"]}"
+        , AssistantMsg "Directory scan complete." []
+        , UserMsg "Edit src/App.hs"
+        , AssistantMsg "Applying edit..." [ToolCall "call-2" "editFile" "{\"targetFile\":\"src/App.hs\"}"]
+        , ToolMsg "call-2" "{\"efrDiffSnippet\":\"--- a/src/App.hs\\n+++ b/src/App.hs\\n@@ -1 +1 @@\\n-old\\n+new\",\"efrPath\":\"src/App.hs\"}"
+        , AssistantMsg "Edit applied successfully." []
+        ]
+
+      -- Check tool logs
+      case appToolLogs stHydrated of
+        [l1, l2] -> do
+          tleToolName l1 `shouldBe` "listDir"
+          tleToolName l2 `shouldBe` "editFile"
+        _ -> expectationFailure "Expected exactly 2 tool logs"
+
+      -- Check diff state
+      case appDiffState stHydrated of
+        Nothing -> expectationFailure "Expected visual diff state to be hydrated"
+        Just ds -> do
+          vdsContent ds `shouldBe` diffText
+          vdsFileName ds `shouldBe` Just "editFile"
+
+      -- Check metrics
+      let m = appMetrics stHydrated
+      amPromptTokens m `shouldBe` 320
+      amCompletionTokens m `shouldBe` 125
+      amTotalTokens m `shouldBe` 445
+      amTurnCount m `shouldBe` 2
+      amLatencyMs m `shouldBe` 360.0
+
+      -- Check status message
+      T.isInfixOf "Session resumed" (appStatusMessage stHydrated) `shouldBe` True
+
+    it "initialAppStateWithEvents initializes hydrated state directly" $ do
+      let events =
+            [ TurnStarted "turn-1"
+            , JournalUserMsg "Ping"
+            , ModelTurn "Pong" []
+            , TurnFinished "turn-1"
+            ]
+          cfg = defaultTUIConfig
+          st = initialAppStateWithEvents cfg Nothing events
+      length (appMessages st) `shouldBe` 2
+      appMessages st `shouldBe` [UserMsg "Ping", AssistantMsg "Pong" []]
+      amTurnCount (appMetrics st) `shouldBe` 1
+
+    it "subsequent prompt submission appends cleanly without duplicating historical turns" $ do
+      let events =
+            [ TurnStarted "turn-1"
+            , JournalUserMsg "Initial prompt"
+            , ModelTurn "Initial answer" []
+            , TurnFinished "turn-1"
+            ]
+          st0 = initialAppStateWithEvents defaultTUIConfig Nothing events
+          st1 = submitPromptPure "Follow-up question" st0
+      length (appMessages st1) `shouldBe` 3
+      appMessages st1 `shouldBe`
+        [ UserMsg "Initial prompt"
+        , AssistantMsg "Initial answer" []
+        , UserMsg "Follow-up question"
+        ]
+      appStatus st1 `shouldBe` StatusThinking
