@@ -354,3 +354,63 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
       -- Final history must contain Turn 1 messages and Turn 3 messages, with ZERO artifacts of Turn 2
       let userMsgs = [t | UserMsg t <- hist]
       userMsgs `shouldBe` ["First task", "Third task"]
+
+    it "preserves pre-existing system prompt and conversation history on structured loop failure" $ do
+      let script = [Left (ApiError 500 "Server error")]
+          opts = defaultAgentOpts { agentMaxRounds = 3 }
+          testProg = do
+            setSystem "You are a critical system tester."
+            pushMessage (UserMsg "Prior user query")
+            pushMessage (AssistantMsg "Prior assistant reply" [])
+            _ <- attempt (runAgentStructuredWith @StressReport opts [addTool] "Should fail and rollback")
+            (,,) <$> getSystem <*> getHistory <*> pure ()
+
+      ((sys, hist, ()), _, _, _) <- runEff $ runLLMMockFull script testProg
+      sys `shouldBe` Just "You are a critical system tester."
+      hist `shouldBe`
+        [ UserMsg "Prior user query"
+        , AssistantMsg "Prior assistant reply" []
+        ]
+
+  describe "4. Multi-Turn Tool Failure Recovery & Deep Workflows in Structured Agents" $ do
+    it "recovers from fail-closed tool argument validation error and successfully completes structured output" $ do
+      -- Round 1: Model calls add with invalid argument (string instead of int)
+      let badToolCall = Right (toolResp [ToolCall "c_bad" "add" (object ["valA" .= ("not_an_int" :: Text), "valB" .= (10 :: Int)])])
+          -- Round 2: Model receives error message in ToolMsg, corrects arguments to add(20, 30)
+          goodToolCall = Right (toolResp [ToolCall "c_good" "add" (object ["valA" .= (20 :: Int), "valB" .= (30 :: Int)])])
+          -- Round 3: Model returns structured result
+          finalObj = object ["reportId" .= ("RECOVERED-TOOL" :: Text), "score" .= (50 :: Int), "tags" .= (["healed"] :: [Text])]
+          finalRound = Right (structuredResp finalObj)
+          script = [badToolCall, goodToolCall, finalRound]
+          opts = defaultAgentOpts { agentMaxRounds = 5 }
+
+      (res, reqs, hist, _) <- runEff $ runLLMMockFull script $
+        runAgentStructuredWith @StressReport opts [addTool] "Calculate with error recovery"
+
+      res `shouldBe` StressReport "RECOVERED-TOOL" 50 ["healed"]
+      length reqs `shouldBe` 3
+      -- Check that Round 1 tool result contains error payload
+      let toolMsgs = [c | ToolMsg _ c <- hist]
+      length toolMsgs `shouldBe` 2
+      (toolMsgs !! 0) `shouldSatisfy` T.isInfixOf "invalid arguments"
+      (toolMsgs !! 1) `shouldBe` "50"
+
+    it "executes 5-step deep tool workflow before delivering structured output" $ do
+      let r1 = Right (toolResp [ToolCall "c1" "add" (object ["valA" .= (1 :: Int), "valB" .= (2 :: Int)])])
+          r2 = Right (toolResp [ToolCall "c2" "add" (object ["valA" .= (3 :: Int), "valB" .= (4 :: Int)])])
+          r3 = Right (toolResp [ToolCall "c3" "multiply" (object ["factorA" .= (3 :: Int), "factorB" .= (7 :: Int)])])
+          r4 = Right (toolResp [ToolCall "c4" "add" (object ["valA" .= (21 :: Int), "valB" .= (9 :: Int)])])
+          r5 = Right (toolResp [ToolCall "c5" "multiply" (object ["factorA" .= (30 :: Int), "factorB" .= (2 :: Int)])])
+          finalObj = object ["reportId" .= ("5-STEP" :: Text), "score" .= (60 :: Int), "tags" .= (["deep","chain"] :: [Text])]
+          rFinal = Right (structuredResp finalObj)
+          script = [r1, r2, r3, r4, r5, rFinal]
+          opts = defaultAgentOpts { agentMaxRounds = 10 }
+
+      (res, reqs, hist, _) <- runEff $ runLLMMockFull script $
+        runAgentStructuredWith @StressReport opts [addTool, mulTool] "Run 5 steps"
+
+      res `shouldBe` StressReport "5-STEP" 60 ["deep", "chain"]
+      length reqs `shouldBe` 6
+      let toolContents = [c | ToolMsg _ c <- hist]
+      toolContents `shouldBe` ["3", "7", "21", "30", "60"]
+
