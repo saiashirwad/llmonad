@@ -204,6 +204,14 @@ module LLMonad (
     loadJournalFileWorld,
     loadJournalText,
     reconstructChatHistory,
+
+    -- * Strict Replay
+    ReplayScript (..),
+    RecordedTurn (..),
+    RecordedToolCall (..),
+    extractReplayScript,
+    strictReplayRuntime,
+    strictReplayToolset,
 ) where
 
 import LLMonad.API
@@ -214,6 +222,7 @@ import LLMonad.Interpreter.Mock
 import LLMonad.Journal
 import LLMonad.Journal.File
 import LLMonad.Journal.Memory
+import LLMonad.Journal.Strict
 import LLMonad.Middleware (Middleware (..))
 import LLMonad.Middleware.Cache
 import LLMonad.Middleware.RateLimit

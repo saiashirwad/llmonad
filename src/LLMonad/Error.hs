@@ -56,6 +56,10 @@ data LLMError
       output against a text-only endpoint).
       -}
       UnsupportedCapability Text
+    | {- | A strict replay met a call its recording does not contain, or ran
+      past the recording's end. Carries a human-readable explanation.
+      -}
+      ReplayDivergence Text
     deriving (Eq, Show)
 
 instance Exception LLMError
@@ -91,3 +95,4 @@ prettyError e = case e of
     AgentRoundsExhausted n -> "agent did not settle after " <> T.pack (show n) <> " rounds"
     AgentConfigurationError t -> "invalid agent configuration: " <> t
     UnsupportedCapability t -> "provider does not support: " <> t
+    ReplayDivergence t -> "replay divergence: " <> t

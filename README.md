@@ -168,8 +168,25 @@ deterministic. Only the arguments to `mount` differ from production — the
 workflow under test is the shipped code.
 
 When a run must be inspectable after the fact, add the `Journal` effect:
-`runJournalFile "session.jsonl"` persists every recorded turn and tool call,
-and `resumeSession "session.jsonl"` reads the events back.
+`runJournalFile "session.jsonl"` persists every recorded turn and tool call.
+A recording can then pin behavior as a regression test — every recorded model
+turn and tool invocation plays back in order, and anything unrecorded raises
+`ReplayDivergence` instead of improvising:
+
+```haskell
+let script = extractReplayScript events
+runtime <- strictReplayRuntime script
+replayResearchTools <- strictReplayToolset script researchTools
+report <-
+  runEff . fmap fst . runWorldMemoryWithFiles [] $
+    workflow
+      (mount runtime replayResearchTools researcherDef)
+      (mount runtime noTools reviewerDef)
+```
+
+The stream is session-wide: both agents above draw from one continuous
+recording, so adding a third `invoke` to the workflow names itself in the
+failure rather than silently shifting every later answer.
 
 ## Keep a conversation
 

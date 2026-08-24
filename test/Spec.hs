@@ -32,6 +32,7 @@ import LLMonad.ReplaySpec qualified
 import LLMonad.SSESpec qualified
 import LLMonad.SchemaSpec qualified
 import LLMonad.StreamingSpec qualified
+import LLMonad.StrictReplaySpec qualified
 import LLMonad.StructuredSpec qualified
 import LLMonad.THSpec qualified
 import LLMonad.WorldAdversarialSpec qualified
@@ -62,6 +63,7 @@ main = hspec $ do
     describe "World Effect Adversarial Stress Tests (R1)" LLMonad.WorldAdversarialSpec.spec
     describe "Journal Effect & Persistence (R2)" LLMonad.JournalSpec.spec
     describe "Journal Replay & Deserialization Fidelity (Batch 5 / R5)" LLMonad.ReplaySpec.spec
+    describe "Strict Replay Divergence" LLMonad.StrictReplaySpec.spec
     describe "Standard Coding Tools (R3)" LLMonad.CodingToolsSpec.spec
     describe "Batch 1 Challenger Adversarial Suite" LLMonad.Batch1AdversarialSpec.spec
     describe "Batch 3 Adversarial Suite" LLMonad.Batch3AdversarialSpec.spec

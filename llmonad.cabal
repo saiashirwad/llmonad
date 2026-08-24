@@ -83,6 +83,7 @@ library
         LLMonad.Journal.File
         LLMonad.Journal.Memory
         LLMonad.Journal.Replay
+        LLMonad.Journal.Strict
         LLMonad.TH
         LLMonad.TH.QuasiQuoter
         LLMonad.Internal.Http
@@ -176,6 +177,7 @@ test-suite llmonad-test
         LLMonad.WorldSpec
         LLMonad.WorldAdversarialSpec
         LLMonad.JournalSpec
+        LLMonad.StrictReplaySpec
         LLMonad.ReplaySpec
         LLMonad.CodingToolsSpec
         LLMonad.Batch1AdversarialSpec
