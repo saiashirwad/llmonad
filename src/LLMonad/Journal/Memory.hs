@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -35,8 +34,7 @@ runJournalMemoryWithState ::
     JournalState ->
     Eff (Journal : es) a ->
     Eff es (a, JournalState)
-runJournalMemoryWithState st action =
-    reinterpret (runState st) memoryJournalHandler action
+runJournalMemoryWithState st = reinterpret (runState st) memoryJournalHandler
 
 -- | Simplified in-memory interpreter that discards accumulated journal events on completion.
 runJournalMemorySimple ::

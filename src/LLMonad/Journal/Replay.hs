@@ -168,7 +168,7 @@ loadJournalText txt =
             case Aeson.eitherDecodeStrict' (TE.encodeUtf8 line) of
                 Left err -> Left ("Line " <> T.pack (show idx) <> ": " <> T.pack err)
                 Right ev -> Right ev
-     in sequence (map parseLine (zip [1 :: Int ..] rawLines))
+     in mapM parseLine (zip [1 :: Int ..] rawLines)
 
 -- | Load and deserialize a JSONL journal file from disk using standard IO.
 loadJournalFile :: (IOE :> es) => FilePath -> Eff es (Either Text [JournalEvent])

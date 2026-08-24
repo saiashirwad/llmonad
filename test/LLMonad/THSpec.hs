@@ -83,6 +83,16 @@ spec = do
                 parsePromptChunks "#{}" `shouldBe` Left "Empty variable interpolation in #{}"
                 parsePromptChunks "Unclosed #{" `shouldBe` Left "Unclosed #{ in prompt template"
 
+            it "escapes exactly one backslash before a tag" $ do
+                -- "\\\\#{x}" is two backslashes then a tag: the first is
+                -- ordinary text, the second escapes the opener.
+                parsePromptChunks "\\\\#{x}" `shouldBe` Right [ChunkLit "\\#{x}"]
+                parsePromptChunks "a\\\\#{b}c" `shouldBe` Right [ChunkLit "a\\#{b}c"]
+
+            it "merges neighbouring literals into single runs" $ do
+                parsePromptChunks "\\#{a}\\#{b} #{v} \\#{c}"
+                    `shouldBe` Right [ChunkLit "#{a}#{b} ", ChunkVar "v", ChunkLit " #{c}"]
+
         describe "makeTool and makeToolNamed Splices" $ do
             it "generates Tool from record-based IO function" $ do
                 let spec' = toolSpec thRecordTool
