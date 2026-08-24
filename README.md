@@ -1,8 +1,11 @@
 # LLMonad
 
-LLMonad is an Effectful library for typed agents, tools, and workflows. A
-tool declares the effects it needs in its own type; an interpreter at the
-program edge discharges them, once.
+LLMonad is an Effectful library for typed agents, tools, and workflows:
+agents call tools, and workflows compose agents.
+
+Each tool declares the effects it needs in its own type. Those requirements
+travel with it to the program edge, where an interpreter discharges them,
+once.
 
 - `runWorldLocal "./workspace"` resolves every path a tool touches inside
   that root and fails on anything else. Other interpreters serve files from
