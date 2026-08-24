@@ -1,22 +1,19 @@
 # LLMonad
 
-LLMonad is an Effectful library for typed agents, tools, and workflows, built
-around one guarantee: **a tool declares the effects it needs, those
-requirements travel with the tool in its type, and they discharge exactly
-once — at the program edge, where an interpreter picks the semantics.**
+LLMonad is an Effectful library for typed agents, tools, and workflows. A
+tool declares the effects it needs, those requirements stay in its type while
+it moves into toolsets and agents, and they discharge exactly once at the
+program edge, where an interpreter picks the semantics.
 
-What follows from that:
-
-- **Confinement is chosen by the interpreter, not begged for in a prompt.**
-  Run under `runWorldLocal "./workspace"` and every path a tool touches
+- Run under `runWorldLocal "./workspace"` and every path a tool touches
   resolves inside that root; anything else fails. Swap the interpreter and the
   same agent runs against in-memory files or a throwaway Git worktree.
-- **Testing is an argument swap.** The same `mount` call that attaches a live
+- Testing is an argument swap: the same `mount` call that attaches a live
   provider can attach a scripted model, so the workflow your tests exercise is
-  the workflow that ships — no network, no disk.
-- **Workflow code never names a provider, model, or HTTP detail.** An
-  `AgentDef` says what an agent does; `mount` gives that definition a model and
-  a toolset; workflows are plain functions taking configured agents.
+  the workflow that ships, with no network and no disk.
+- Workflow code never names a provider, a model, or an HTTP detail. An
+  `AgentDef` says what an agent does, `mount` gives that definition a model
+  and a toolset, and workflows are plain functions taking configured agents.
 
 ## Define the agents
 
@@ -76,8 +73,8 @@ researchTools =
 Tool handlers run in `Eff`, so the effects a tool needs stay in the type of the
 toolset. `viewFileTool` reads files through the `World` effect, which is why
 `researchTools` carries `World :> es`. That constraint follows the agent
-around until the program interprets `World` at the edge — which is also how
-the reviewer below ends up unable to touch the disk at all.
+around until the program interprets `World` at the edge, which is also why the
+reviewer below never touches the disk.
 
 Write your own tool by wrapping a function whose argument type derives
 `FromJSON` and `ToSchema`. The derived schema is what the model sees; the
@@ -127,12 +124,12 @@ main = do
   TIO.putStrLn report
 ```
 
-Three things happen in that `let`:
+What each part does:
 
 - Each agent gets a model. `mount` is the only place a provider is named, so
   giving the reviewer a different `runtime` mixes models in one workflow.
 - Each agent gets its own tools. The researcher reads the project; the
-  reviewer cannot touch the disk at all.
+  reviewer gets no tools and only reasons over text.
 - `runWorldLocal "."` interprets `World`, discharging the constraint the
   toolset carried.
 
@@ -145,7 +142,7 @@ outside the root gets an error, not your filesystem.
 The same `World` effect has other interpreters, and swapping them changes
 nothing above:
 
-- `runWorldMemoryWithFiles` serves files from memory — no disk involved.
+- `runWorldMemoryWithFiles` serves files from memory (no disk involved).
 - `runWorldWorktree` runs the computation inside an ephemeral Git worktree
   that is removed afterward, returning a summary of what changed.
 
@@ -164,12 +161,12 @@ report <-
 ```
 
 Each script restarts for every invocation, which keeps independent agent calls
-deterministic. Only the arguments to `mount` differ from production — the
+deterministic. Only the arguments to `mount` differ from production. The
 workflow under test is the shipped code.
 
 When a run must be inspectable after the fact, add the `Journal` effect:
 `runJournalFile "session.jsonl"` persists every recorded turn and tool call.
-A recording can then pin behavior as a regression test — every recorded model
+A recording can then pin behavior as a regression test: every recorded model
 turn and tool invocation plays back in order, and anything unrecorded raises
 `ReplayDivergence` instead of improvising:
 
@@ -185,8 +182,8 @@ report <-
 ```
 
 The stream is session-wide: both agents above draw from one continuous
-recording, so adding a third `invoke` to the workflow names itself in the
-failure rather than silently shifting every later answer.
+recording. Adding another `invoke` to the workflow fails with that call named
+in the error, instead of shifting every later answer.
 
 ## Keep a conversation
 
