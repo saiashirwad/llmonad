@@ -112,6 +112,9 @@ module LLMonad
     -- * Tools & Agent
   , Tool (..)
   , ToolIO
+  , Toolset
+  , tools
+  , noTools
   , tool
   , tool'
   , toolSync
@@ -126,12 +129,31 @@ module LLMonad
   , runAgentStructuredWith
   , AgentOpts (..)
   , defaultAgentOpts
+  , Agent
+  , AgentDef
+  , textAgent
+  , structuredAgent
+  , withAgentOpts
+  , bind
+  , invoke
+  , Session
+  , start
+  , continue
+
+    -- * Model Runtimes
+  , ModelRuntime
+  , model
+  , modelWithConfig
+  , mockModel
+
+    -- * Workflow Concurrency
+  , concurrently
+  , race
+  , mapConcurrentlyN
+  , WorkflowError (..)
 
     -- * Standard Coding Tools
   , module LLMonad.Tools.Coding
-
-    -- * Subagent Delegation
-  , module LLMonad.Subagent
 
     -- * Template Haskell
   , prompt
@@ -192,6 +214,7 @@ import LLMonad.Journal.Memory
 import LLMonad.Middleware.Cache
 import LLMonad.Middleware.RateLimit
 import LLMonad.Middleware.Trace
+import LLMonad.Model
 import LLMonad.Prompt
 import LLMonad.Provider
 import LLMonad.Providers.Anthropic
@@ -199,7 +222,6 @@ import LLMonad.Providers.OpenAICompatible
 import LLMonad.Schema
 import LLMonad.Streaming
 import LLMonad.Structured
-import LLMonad.Subagent
 import LLMonad.TH
 import LLMonad.Tools
 import LLMonad.Tools.Coding
@@ -208,5 +230,5 @@ import LLMonad.World
 import LLMonad.World.Local
 import LLMonad.World.Memory
 import LLMonad.World.Worktree
-
+import LLMonad.Workflow
 

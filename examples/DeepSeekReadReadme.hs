@@ -1,32 +1,34 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators #-}
 
 module Main (main) where
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Effectful (Eff, IOE, (:>), liftIO, runEff)
+import Effectful (Eff, runEff)
 import LLMonad
 import System.Directory (getCurrentDirectory)
 import System.Environment (lookupEnv)
 
-workflow :: (LLM :> es, World :> es, IOE :> es) => Eff es ()
-workflow = do
-  setSystem "Inspect the project with the supplied read-only tools. Base each answer on file contents."
-  reply <- runAgent [viewFileTool] "Read README.md and give a short project summary."
-  liftIO (TIO.putStrLn reply)
+definition :: AgentDef T.Text T.Text
+definition =
+  textAgent
+    "Inspect the project with the supplied read-only tools. Base each answer on file contents."
+    id
+
+workflow :: Agent es T.Text T.Text -> Eff es T.Text
+workflow projectReader = invoke projectReader "Read README.md and give a short project summary."
 
 main :: IO ()
 main = do
   key <- requireDeepSeekKey
   projectRoot <- getCurrentDirectory
-  let config = defaultConfig (deepSeekProvider key) "deepseek-v4-flash"
-  runEff
-    . runLLMHTTP config
-    . runWorldLocal projectRoot
-    $ workflow
+  let projectReader =
+        bind
+          (model (deepSeekProvider key) "deepseek-v4-flash")
+          (tools [viewFileTool])
+          definition
+  reply <- runEff . runWorldLocal projectRoot $ workflow projectReader
+  TIO.putStrLn reply
 
 requireDeepSeekKey :: IO T.Text
 requireDeepSeekKey = do

@@ -29,35 +29,23 @@ module LLMonad.Tools
   , mkTool
   , liftTool
   , hoistTool
+  , Toolset
+  , tools
+  , noTools
+  , toolsetTools
   , (.:?|)
   , (.:|)
   , ToolResult
-  , AgentOpts (..)
-  , defaultAgentOpts
-  , useTools
-  , useToolsWith
   ) where
 
-import Control.Exception (throwIO)
-import Control.Monad (when)
-import Data.Aeson (FromJSON, Key, Object, ToJSON (..), Value (..), encode, object, parseJSON, (.=))
+import Data.Aeson (FromJSON, Key, Object, ToJSON (..), Value, parseJSON)
 import Data.Aeson.Types (Parser, (.:?), parseEither)
-import qualified Data.ByteString.Lazy as LBS
-import Data.List (find, intercalate)
+import Data.List (intercalate)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding (decodeUtf8With)
-import Data.Text.Encoding.Error (lenientDecode)
 import Effectful
-import LLMonad.Core
-  ( LLM
-  , chatRound
-  , pushMessage
-  , withTransaction
-  )
-import LLMonad.Error (LLMError (..))
 import LLMonad.Schema (ToSchema (..))
-import LLMonad.Types
+import LLMonad.Types (ToolSpec (..))
 
 -- | Result of running a tool: either a human- or JSON-formatted error string
 -- that will be passed back to the model as feedback, or a JSON payload.
@@ -164,60 +152,19 @@ liftTool (Tool spec run) = Tool spec (\val -> liftIO (run val))
 hoistTool :: (forall x. m x -> n x) -> Tool m -> Tool n
 hoistTool nat (Tool spec run) = Tool spec (nat . run)
 
--- | Knobs for the agent loop.
-data AgentOpts = AgentOpts
-  { -- | Maximum model round-trips before giving up.
-    agentMaxRounds :: Int
-  , -- | Sampling parameters for every round.
-    agentParams    :: Params
-  }
+-- | A composable set of tools for one configured agent.
+newtype Toolset es = Toolset {toolsetTools :: [Tool (Eff es)]}
 
-defaultAgentOpts :: AgentOpts
-defaultAgentOpts =
-  AgentOpts
-    { agentMaxRounds = 8
-    , agentParams = defaultParams
-    }
+instance Semigroup (Toolset es) where
+  Toolset left <> Toolset right = Toolset (left <> right)
 
--- | Give the model tools and a task; let it call them until it produces a
--- final answer. Throws 'AgentRoundsExhausted' if it never settles.
-useTools :: (LLM :> es, IOE :> es) => [Tool (Eff es)] -> Text -> Eff es Text
-useTools = useToolsWith defaultAgentOpts
+instance Monoid (Toolset es) where
+  mempty = Toolset []
 
--- | 'useTools' with explicit options.
-useToolsWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
-useToolsWith opts tools instruction = withTransaction $ do
-  pushMessage (UserMsg instruction)
-  loop (agentMaxRounds opts) []
-  where
-    specs = map toolSpec tools
+-- | Build a toolset from individual tools.
+tools :: [Tool (Eff es)] -> Toolset es
+tools = Toolset
 
-    loop roundsLeft prevSignatures
-      | roundsLeft <= 0 = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
-      | otherwise = do
-          resp <- chatRound (agentParams opts) RfText specs ToolAuto
-          case crspToolCalls resp of
-            [] -> pure (crspText resp)
-            calls
-              | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
-              | otherwise -> do
-                  let currentSignatures = [(toolCallName c, toolCallArguments c) | c <- calls]
-                  mapM_ executeAndRecord calls
-                  when (currentSignatures == prevSignatures && not (null currentSignatures)) $ do
-                    pushMessage (UserMsg "Warning: Repeated identical tool call signature detected. Please adjust your plan or return the final answer.")
-                  loop (roundsLeft - 1) currentSignatures
-
-    executeAndRecord call = do
-      let payload = case find ((== toolCallName call) . toolSpecName) specs of
-            Nothing -> Left ("unknown tool: " <> toolCallName call)
-            Just _ -> case find ((== toolCallName call) . toolSpecName . toolSpec) tools of
-              Nothing -> Left ("unknown tool implementation: " <> toolCallName call)
-              Just t -> Right t
-      result <- case payload of
-        Left errMsg -> pure (Left errMsg)
-        Right t -> toolRun t (toolCallArguments call)
-      let value = case result of
-            Right v -> v
-            Left errMsg -> object ["error" .= errMsg]
-          content = decodeUtf8With lenientDecode . LBS.toStrict . encode $ value
-      pushMessage (ToolMsg (toolCallId call) content)
+-- | An agent with no tools.
+noTools :: Toolset es
+noTools = mempty

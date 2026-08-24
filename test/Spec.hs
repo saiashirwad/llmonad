@@ -5,6 +5,7 @@ module Main where
 import qualified LLMonad.AgentSpec
 import qualified LLMonad.AnthropicSpec
 import qualified LLMonad.ChallengerSpec
+import qualified LLMonad.CompositionSpec
 import qualified LLMonad.CoreSpec
 import qualified LLMonad.CurriedAPISpec
 import qualified LLMonad.E2ETier3Spec
@@ -20,17 +21,11 @@ import qualified LLMonad.StreamingSpec
 import qualified LLMonad.StructuredSpec
 import qualified LLMonad.THSpec
 import qualified LLMonad.CodingToolsSpec
-import qualified LLMonad.CodingToolsAdversarialSpec
 import qualified LLMonad.JournalSpec
 import qualified LLMonad.ReplaySpec
-import qualified LLMonad.SubagentSpec
 import qualified LLMonad.WorldSpec
 import qualified LLMonad.WorldAdversarialSpec
-import qualified LLMonad.E2ESpec
 import qualified LLMonad.Batch1AdversarialSpec
-import qualified LLMonad.Batch2AdversarialSpec
-import qualified LLMonad.Batch2ChallengerStressSpec
-import qualified LLMonad.Batch2ChallengerSpec
 import qualified LLMonad.Batch3AdversarialSpec
 import qualified LLMonad.Batch3ChallengerSpec
 import qualified LLMonad.Batch3ChallengerStressSpec
@@ -55,6 +50,7 @@ main = hspec $ do
   describe "Template Haskell & QuasiQuoter (F6.1, F6.2)" LLMonad.THSpec.spec
   describe "Extract (F2.3)" LLMonad.ExtractSpec.spec
   describe "Agent & Tools (F4.1, F4.2, F4.3)" LLMonad.AgentSpec.spec
+  describe "Agent Composition" LLMonad.CompositionSpec.spec
   describe "OpenAICompatible Provider (F1.2)" LLMonad.OpenAICompatSpec.spec
   describe "Anthropic Provider (F1.2)" LLMonad.AnthropicSpec.spec
   describe "SSE Parser (F5.3)" LLMonad.SSESpec.spec
@@ -67,13 +63,7 @@ main = hspec $ do
   describe "Journal Effect & Persistence (R2)" LLMonad.JournalSpec.spec
   describe "Journal Replay & Deserialization Fidelity (Batch 5 / R5)" LLMonad.ReplaySpec.spec
   describe "Standard Coding Tools (R3)" LLMonad.CodingToolsSpec.spec
-  describe "Subagent Delegation (R3)" LLMonad.SubagentSpec.spec
-  describe "Coding Tools & Subagents Adversarial Suite (M3)" LLMonad.CodingToolsAdversarialSpec.spec
-  describe "E2E Master Suite (Milestone 5 / Tiers 1-5)" LLMonad.E2ESpec.spec
   describe "Batch 1 Challenger Adversarial Suite" LLMonad.Batch1AdversarialSpec.spec
-  describe "Batch 2 Adversarial Suite" LLMonad.Batch2AdversarialSpec.spec
-  describe "Batch 2 Challenger Stress Suite" LLMonad.Batch2ChallengerStressSpec.spec
-  describe "Batch 2 Challenger Adversarial Suite" LLMonad.Batch2ChallengerSpec.spec
   describe "Batch 3 Adversarial Suite" LLMonad.Batch3AdversarialSpec.spec
   describe "Batch 3 Challenger Suite" LLMonad.Batch3ChallengerSpec.spec
   describe "Batch 3 Challenger Stress Suite" LLMonad.Batch3ChallengerStressSpec.spec

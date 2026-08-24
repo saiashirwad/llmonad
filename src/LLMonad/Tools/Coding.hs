@@ -22,6 +22,8 @@ module LLMonad.Tools.Coding
   , findByNameTool
   , listDirTool
   , runCommandTool
+  , readOnlyCodingToolset
+  , standardCodingToolset
   , standardCodingTools
 
     -- * Pure & Effectful Runner Functions
@@ -83,7 +85,7 @@ import Effectful
 import qualified Effectful.Exception as E
 import GHC.Generics (Generic)
 import LLMonad.Schema (ToSchema (..))
-import LLMonad.Tools (Tool, ToolResult, tool')
+import LLMonad.Tools (Tool, ToolResult, Toolset, tool', tools)
 import System.FilePath (makeRelative, (</>))
 import LLMonad.World
   ( CommandSpec (..)
@@ -693,3 +695,12 @@ standardCodingTools =
   , listDirTool
   , runCommandTool
   ]
+
+-- | Project inspection tools with no write or process authority.
+readOnlyCodingToolset :: (World :> es) => Toolset es
+readOnlyCodingToolset =
+  tools [viewFileTool, grepSearchTool, findByNameTool, listDirTool]
+
+-- | All standard project tools.
+standardCodingToolset :: (World :> es) => Toolset es
+standardCodingToolset = tools standardCodingTools

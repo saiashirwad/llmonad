@@ -66,8 +66,9 @@ library
         LLMonad.Streaming
         LLMonad.Tools
         LLMonad.Tools.Coding
-        LLMonad.Subagent
         LLMonad.Agent
+        LLMonad.Model
+        LLMonad.Workflow
         LLMonad.World
         LLMonad.World.Types
         LLMonad.World.Local
@@ -162,6 +163,7 @@ test-suite llmonad-test
         LLMonad.AnthropicSpec
         LLMonad.MockSpec
         LLMonad.AgentSpec
+        LLMonad.CompositionSpec
         LLMonad.CurriedAPISpec
         LLMonad.StructuredSpec
         LLMonad.PromptSpec
@@ -175,13 +177,7 @@ test-suite llmonad-test
         LLMonad.JournalSpec
         LLMonad.ReplaySpec
         LLMonad.CodingToolsSpec
-        LLMonad.SubagentSpec
-        LLMonad.CodingToolsAdversarialSpec
-        LLMonad.E2ESpec
         LLMonad.Batch1AdversarialSpec
-        LLMonad.Batch2AdversarialSpec
-        LLMonad.Batch2ChallengerStressSpec
-        LLMonad.Batch2ChallengerSpec
         LLMonad.Batch3AdversarialSpec
         LLMonad.Batch3ChallengerStressSpec
         LLMonad.Batch3ChallengerSpec

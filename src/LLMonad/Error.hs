@@ -51,6 +51,8 @@ data LLMError
       }
   | -- | The agent loop burned through its round budget without a final answer.
     AgentRoundsExhausted Int
+  | -- | A configured agent has an invalid static definition.
+    AgentConfigurationError Text
   | -- | The configured provider cannot do what was asked (e.g. structured
     -- output against a text-only endpoint).
     UnsupportedCapability Text
@@ -69,7 +71,7 @@ isTransient RateLimitError {} = True
 isTransient (ApiError s _) = s == 408 || s == 409 || s >= 500
 isTransient _ = False
 
--- | Human-readable one-liner for logs and CLI output.
+-- | Human-readable one-line error report.
 prettyError :: LLMError -> Text
 prettyError e = case e of
   HttpError t -> "network error: " <> t
@@ -86,4 +88,5 @@ prettyError e = case e of
   NoAssistantMessage -> "provider returned no assistant message"
   ToolArgumentError t d -> "tool \"" <> t <> "\" got unusable arguments: " <> T.pack d
   AgentRoundsExhausted n -> "agent did not settle after " <> T.pack (show n) <> " rounds"
+  AgentConfigurationError t -> "invalid agent configuration: " <> t
   UnsupportedCapability t -> "provider does not support: " <> t

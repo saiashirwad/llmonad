@@ -1,34 +1,67 @@
 # LLMonad
 
-A typed Effectful interface for LLM calls and tool-using agents in Haskell.
+LLMonad is an Effectful library for typed agents, tools, and workflows.
 
-## DeepSeek
+An `AgentDef` describes an agent without selecting a model. `bind` attaches a
+model and a toolset. A workflow receives configured agents, so its code stays
+independent of providers and model names.
 
 ```haskell
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Effectful (Eff, IOE, (:>), liftIO, runEff)
+import Data.Text (Text)
+import Effectful
 import LLMonad
-import System.Environment (getEnv)
 
-hello :: (LLM :> es, IOE :> es) => Eff es ()
-hello = do
-  answer <- generateText "Give me one useful fact about Haskell."
-  liftIO (TIO.putStrLn answer)
+researcherDef :: AgentDef Text Text
+researcherDef =
+  textAgent "Inspect the project and report evidence from its files." id
 
-main :: IO ()
-main = do
-  key <- T.pack <$> getEnv "DEEPSEEK_API_KEY"
-  let config = defaultConfig (deepSeekProvider key) "deepseek-v4-flash"
-  runEff (runLLMHTTP config hello)
+reviewerDef :: AgentDef Text Text
+reviewerDef =
+  textAgent "Check the report for unsupported claims." id
+
+workflow ::
+  IOE :> es =>
+  Agent es Text Text ->
+  Agent es Text Text ->
+  Eff es Text
+workflow researcher reviewer = do
+  (overview, tests) <-
+    concurrently
+      (invoke researcher "Read the main modules.")
+      (invoke researcher "Read the tests.")
+  invoke reviewer (overview <> "\n\n" <> tests)
 ```
 
-`runLLMMock` runs the same `LLM` effect without an HTTP request.
+Configure the agents at the edge of the program:
+
+```haskell
+let runtime = model (deepSeekProvider apiKey) "deepseek-v4-flash"
+    researcher = bind runtime readOnlyCodingToolset researcherDef
+    reviewer = bind runtime noTools reviewerDef
+
+report <- runEff . runWorldLocal projectRoot $ workflow researcher reviewer
+```
+
+`invoke` starts with empty conversation history. Use `Session` when a
+conversation must keep its history:
+
+```haskell
+session <- start researcher
+first <- continue session "Read README.md."
+second <- continue session "Now check the source against that description."
+```
+
+Toolsets compose with `(<>)`. Tool handlers run in `Eff`, so their required
+effects stay in the type of the toolset.
+
+```haskell
+projectTools :: World :> es => Toolset es
+projectTools = tools [viewFileTool, grepSearchTool] <> tools [listDirTool]
+```
 
 ## Examples
 
@@ -40,13 +73,9 @@ cabal run deepseek-read-readme
 cabal run deepseek-ask-project -- "Where is the World effect interpreted?"
 ```
 
-The project examples use `World` with read-only file tools. See
-[`DeepSeekAskProject.hs`](examples/DeepSeekAskProject.hs) for the complete
-effect stack.
-
 ## Development
 
 ```bash
 cabal build all --ghc-options="-Wall -Werror"
-cabal test -j1
+cabal test
 ```
