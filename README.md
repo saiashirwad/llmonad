@@ -3,10 +3,6 @@
 LLMonad is an Effectful library for typed agents, tools, and workflows:
 agents call tools, and workflows compose agents.
 
-A tool that reads files carries `World :> es` in its type. That constraint
-follows the tool into toolsets and agents, and one interpreter at the program
-edge discharges it for the whole run.
-
 - `runWorldLocal "./workspace"` resolves every path a tool touches inside
   that root and fails on anything else. Other interpreters serve files from
   memory or run them in a throwaway Git worktree.
@@ -37,15 +33,22 @@ edge discharges it for the whole run.
 
 How to read the signatures:
 
-- `Eff es` is a computation whose allowed effects are listed in `es`, and
-  `World :> es` reads as "World is available in es".
-- The effect system comes from
-  [Effectful](https://github.com/haskell-effectful/effectful); `IOE` is its
-  effect for raw `IO`.
-- `World` and `Journal` are effects LLMonad defines on top of it.
-- The program edge is wherever your code calls a `run...` interpreter such as
-  `runEff` or `runWorldLocal`: above that line, effects exist only in types;
-  below it, they become real work.
+- Notation:
+  - `Eff es` is a computation whose allowed effects are listed in `es`.
+  - `World :> es` reads as "World is available in es".
+- Where effects come from:
+  - The effect system is
+    [Effectful](https://github.com/haskell-effectful/effectful); `IOE` is its
+    effect for raw `IO`.
+  - `World` and `Journal` are LLMonad's own:
+    - `World` is the machine: files, directories, commands.
+    - `Journal` is the session log: model turns and tool calls, recorded as
+      they happen.
+- The program edge:
+  - Wherever your code calls a `run...` interpreter: `runEff`,
+    `runWorldLocal`, and friends.
+  - Above the edge, effects exist only in types; below it, they become real
+    work.
 
 ## Define the agents
 
@@ -107,9 +110,8 @@ researchTools =
 ```
 
 Tool handlers run in `Eff`, so the effects a tool needs stay in the type of the
-toolset. `viewFileTool` reads files through `World`, LLMonad's effect for the
-machine itself: reading and writing files, listing directories, and running
-commands. That is why `researchTools` carries `World :> es`. The constraint
+toolset. `viewFileTool` reads files through `World`, which is why
+`researchTools` carries `World :> es`. The constraint
 follows the agent around until the program interprets `World` at the edge,
 which is also why the reviewer below never touches the disk.
 
@@ -202,15 +204,20 @@ report <-
       (mount (mockModel [Right (textResp "no unsupported claims")]) noTools reviewerDef)
 ```
 
-Each script restarts for every invocation, which keeps independent agent calls
-deterministic. Only the arguments to `mount` differ from production. The
-workflow under test is the shipped code.
+- Each script restarts for every invocation, so independent agent calls stay
+  deterministic.
+- Only the arguments to `mount` differ from production. The workflow under
+  test is the shipped code.
 
-When a run must be inspectable after the fact, add the `Journal` effect:
+For a record after the fact, add the `Journal` effect:
 `runJournalFile "session.jsonl"` persists every recorded turn and tool call.
-A recording can then pin behavior as a regression test: every recorded model
-turn and tool invocation plays back in order, and anything unrecorded raises
-`ReplayDivergence` instead of improvising:
+A recording doubles as a regression test:
+
+- every recorded model turn and tool invocation plays back, in order
+- anything unrecorded raises `ReplayDivergence` instead of improvising
+- the stream is session-wide: both agents draw from one continuous recording
+- adding another `invoke` fails with that call named in the error, instead of
+  shifting every later answer
 
 ```haskell
 let script = extractReplayScript events
@@ -222,10 +229,6 @@ report <-
       (mount runtime replayResearchTools researcherDef)
       (mount runtime noTools reviewerDef)
 ```
-
-The stream is session-wide: both agents above draw from one continuous
-recording. Adding another `invoke` to the workflow fails with that call named
-in the error, instead of shifting every later answer.
 
 ## Keep a conversation
 
