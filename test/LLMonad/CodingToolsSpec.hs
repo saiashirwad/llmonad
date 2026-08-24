@@ -267,6 +267,15 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
           Success gsr -> gsrTotalCount gsr `shouldBe` 1
           Error err   -> expectationFailure ("JSON decode failed: " <> err)
 
+    it "returns World directory failures to the model as tool errors" $ do
+      let st = initMemoryWorld [("src/Main.hs", "module Main where")]
+      (toolRes, _) <- runEff $ runWorldMemory st $ do
+        toolRun grepSearchTool (toJSON (GrepSearchArgs "Main" (Just "src/Main.hs") Nothing Nothing Nothing Nothing Nothing))
+
+      case toolRes of
+        Left err -> err `shouldSatisfy` ("Directory not found" `T.isInfixOf`)
+        Right _  -> expectationFailure "Expected a recoverable World tool error"
+
   describe "4. findByNameTool" $ do
     it "discovers files matching pattern in memory" $ do
       let files =

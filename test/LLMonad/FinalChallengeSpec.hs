@@ -174,8 +174,3 @@ spec = describe "Final Challenger End-to-End Stress Suite" $ do
             name `shouldBe` "test_tool"
             args `shouldBe` object ["arg" .= (42 :: Int)]
           other -> expectationFailure ("Expected ToolInvoked, got: " <> show other)
-
-    describe "6. Batch 6: TUI Diff Snippet Extraction" $ do
-      it "extracts diff snippet respecting key precedence" $ do
-        let res = Right (object ["efrDiffSnippet" .= ("+new line" :: Text), "diff" .= ("old" :: Text)])
-        extractDiffFromToolResult res `shouldBe` Just "+new line"

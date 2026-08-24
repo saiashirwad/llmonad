@@ -24,8 +24,6 @@ import qualified LLMonad.CodingToolsAdversarialSpec
 import qualified LLMonad.JournalSpec
 import qualified LLMonad.ReplaySpec
 import qualified LLMonad.SubagentSpec
-import qualified LLMonad.TUISpec
-import qualified LLMonad.TUIAdversarialSpec
 import qualified LLMonad.WorldSpec
 import qualified LLMonad.WorldAdversarialSpec
 import qualified LLMonad.E2ESpec
@@ -42,8 +40,6 @@ import qualified LLMonad.Batch4ChallengerStressSpec
 import qualified LLMonad.Batch5AdversarialSpec
 import qualified LLMonad.Batch5ChallengerSpec
 import qualified LLMonad.Batch5ChallengerStressSpec
-import qualified LLMonad.Batch6ChallengerSpec
-import qualified LLMonad.Batch6ChallengerStressSpec
 import qualified LLMonad.FinalChallengeSpec
 import Test.Hspec
 
@@ -73,8 +69,6 @@ main = hspec $ do
   describe "Standard Coding Tools (R3)" LLMonad.CodingToolsSpec.spec
   describe "Subagent Delegation (R3)" LLMonad.SubagentSpec.spec
   describe "Coding Tools & Subagents Adversarial Suite (M3)" LLMonad.CodingToolsAdversarialSpec.spec
-  describe "Brick + Vty Interactive TUI (R4 / Milestone 4)" LLMonad.TUISpec.spec
-  describe "Brick + Vty Interactive TUI Adversarial Suite (M4)" LLMonad.TUIAdversarialSpec.spec
   describe "E2E Master Suite (Milestone 5 / Tiers 1-5)" LLMonad.E2ESpec.spec
   describe "Batch 1 Challenger Adversarial Suite" LLMonad.Batch1AdversarialSpec.spec
   describe "Batch 2 Adversarial Suite" LLMonad.Batch2AdversarialSpec.spec
@@ -89,6 +83,4 @@ main = hspec $ do
   describe "Batch 5 Adversarial & Fidelity Suite" LLMonad.Batch5AdversarialSpec.spec
   describe "Batch 5 Empirical Challenger Suite" LLMonad.Batch5ChallengerSpec.spec
   describe "Batch 5 Empirical Challenger Stress Suite" LLMonad.Batch5ChallengerStressSpec.spec
-  describe "Batch 6 Empirical Challenger Suite" LLMonad.Batch6ChallengerSpec.spec
-  describe "Batch 6 Empirical Challenger Stress Suite" LLMonad.Batch6ChallengerStressSpec.spec
   describe "Final Challenger End-to-End Stress Suite" LLMonad.FinalChallengeSpec.spec

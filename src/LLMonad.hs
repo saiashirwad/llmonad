@@ -179,8 +179,6 @@ module LLMonad
   , loadJournalFileWorld
   , loadJournalText
   , reconstructChatHistory
-    -- * Terminal User Interface (Brick + Vty)
-  , module LLMonad.TUI
   ) where
 
 import LLMonad.API
@@ -205,12 +203,10 @@ import LLMonad.Subagent
 import LLMonad.TH
 import LLMonad.Tools
 import LLMonad.Tools.Coding
-import LLMonad.TUI
 import LLMonad.Types
 import LLMonad.World
 import LLMonad.World.Local
 import LLMonad.World.Memory
 import LLMonad.World.Worktree
-
 
 

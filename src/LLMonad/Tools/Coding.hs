@@ -80,9 +80,10 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Effectful
+import qualified Effectful.Exception as E
 import GHC.Generics (Generic)
 import LLMonad.Schema (ToSchema (..))
-import LLMonad.Tools (Tool, tool')
+import LLMonad.Tools (Tool, ToolResult, tool')
 import System.FilePath (makeRelative, (</>))
 import LLMonad.World
   ( CommandSpec (..)
@@ -101,6 +102,8 @@ import LLMonad.World
   , searchFiles
   , writeFileText
   , World
+  , WorldError
+  , prettyWorldError
   )
 
 --------------------------------------------------------------------------------
@@ -115,6 +118,19 @@ oneOf o keys = asum <$> traverse (o .:?) keys
 -- | Use the optional result if it is present; otherwise run the fallback parser.
 orElse :: Parser (Maybe a) -> Parser a -> Parser a
 orElse p fallback = p >>= maybe fallback pure
+
+-- | Build a coding tool that reports expected World failures to the model.
+worldTool ::
+  forall a es.
+  (FromJSON a, ToSchema a) =>
+  Text ->
+  Text ->
+  (a -> Eff es ToolResult) ->
+  Tool (Eff es)
+worldTool name description run =
+  tool' name description $ \args ->
+    E.catch (run args) $ \(err :: WorldError) ->
+      pure (Left (prettyWorldError err))
 
 --------------------------------------------------------------------------------
 -- 1. viewFile Tool
@@ -224,7 +240,7 @@ truncateLines maxBytes linesList = go 0 [] linesList
 
 -- | Type-safe 'Tool' for viewing files.
 viewFileTool :: (World :> es) => Tool (Eff es)
-viewFileTool = tool' "view_file" "Read file contents with 1-indexed line slicing, max 800 lines" $ \args ->
+viewFileTool = worldTool "view_file" "Read file contents with 1-indexed line slicing, max 800 lines" $ \args ->
   runViewFile args >>= \case
     Left err  -> pure (Left err)
     Right res -> pure (Right (toJSON res))
@@ -374,7 +390,7 @@ computeModifiedLines oldContent newContent =
 
 -- | Type-safe 'Tool' for editing files.
 editFileTool :: (World :> es) => Tool (Eff es)
-editFileTool = tool' "edit_file" "Perform exact string replacement in a file with line validation" $ \args ->
+editFileTool = worldTool "edit_file" "Perform exact string replacement in a file with line validation" $ \args ->
   runEditFile args >>= \case
     Left err  -> pure (Left err)
     Right res -> pure (Right (toJSON res))
@@ -439,7 +455,7 @@ runGrepSearch GrepSearchArgs{..} = do
 
 -- | Type-safe 'Tool' for searching file contents.
 grepSearchTool :: (World :> es) => Tool (Eff es)
-grepSearchTool = tool' "grep_search" "Search file contents by plain text or regex query" $ \args ->
+grepSearchTool = worldTool "grep_search" "Search file contents by plain text or regex query" $ \args ->
   runGrepSearch args >>= \case
     Left err  -> pure (Left err)
     Right res -> pure (Right (toJSON res))
@@ -508,7 +524,7 @@ runFindByName FindByNameArgs{..} = do
 
 -- | Type-safe 'Tool' for discovering files by name pattern.
 findByNameTool :: (World :> es) => Tool (Eff es)
-findByNameTool = tool' "find_by_name" "Find files and directories by name pattern and depth" $ \args ->
+findByNameTool = worldTool "find_by_name" "Find files and directories by name pattern and depth" $ \args ->
   runFindByName args >>= \case
     Left err  -> pure (Left err)
     Right res -> pure (Right (toJSON res))
@@ -596,7 +612,7 @@ collectDirEntries baseDir currentDir currentDepth maxD = do
 
 -- | Type-safe 'Tool' for listing directory contents.
 listDirTool :: (World :> es) => Tool (Eff es)
-listDirTool = tool' "list_dir" "List files and subdirectories within a directory" $ \args ->
+listDirTool = worldTool "list_dir" "List files and subdirectories within a directory" $ \args ->
   runListDir args >>= \case
     Left err  -> pure (Left err)
     Right res -> pure (Right (toJSON res))
@@ -658,7 +674,7 @@ runRunCommand RunCommandArgs{..} = do
 
 -- | Type-safe 'Tool' for running shell commands.
 runCommandTool :: (World :> es) => Tool (Eff es)
-runCommandTool = tool' "run_command" "Execute a shell command with timeout and process tracking" $ \args ->
+runCommandTool = worldTool "run_command" "Execute a shell command with timeout and process tracking" $ \args ->
   runRunCommand args >>= \case
     Left err  -> pure (Left err)
     Right res -> pure (Right (toJSON res))

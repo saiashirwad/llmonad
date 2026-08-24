@@ -4,11 +4,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | Comprehensive End-to-End Test Suite across Tiers 1-5 for LLMonad Coding Agent Runtime & TUI.
+-- | Comprehensive end-to-end tests for the LLMonad programmatic interface.
 module LLMonad.E2ESpec (spec) where
 
-import Brick.Focus (focusGetCurrent)
-import Brick.Widgets.Edit (getEditContents)
 import Control.Concurrent.Async (forConcurrently_, wait)
 import Control.Monad (forM_)
 import Data.Aeson (object, toJSON, (.=))
@@ -18,7 +16,6 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Effectful
 import qualified Effectful.Exception as EE
-import qualified Graphics.Vty as Vty
 import LLMonad
 import qualified LLMonad.Types as CoreTypes
 import System.FilePath ((</>))
@@ -310,51 +307,6 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
         srStatus res `shouldBe` "completed"
         srOutput res `shouldBe` "Async subagent result"
 
-    describe "5. Brick + Vty TUI State Machine & Widgets" $ do
-      it "initializes AppState with default values" $ do
-        let st = initialAppState defaultTUIConfig Nothing
-        appStatus st `shouldBe` StatusIdle
-        appMessages st `shouldBe` []
-        appStreamingText st `shouldBe` ""
-        focusGetCurrent (appFocusRing st) `shouldBe` Just EditorPrompt
-
-      it "handles prompt submission and transitions to StatusThinking" $ do
-        let st0 = initialAppState defaultTUIConfig Nothing
-        let st1 = submitPromptPure "Build feature X" st0
-        appStatus st1 `shouldBe` StatusThinking
-        appMessages st1 `shouldBe` [UserMsg "Build feature X"]
-        getEditContents (appEditor st1) `shouldBe` [""]
-
-      it "handles token streaming and commits on turn completion" $ do
-        let st0 = initialAppState defaultTUIConfig Nothing
-        let st1 = handleCustomAppEvent (TokenStreamed "Generating ") st0
-        let st2 = handleCustomAppEvent (TokenStreamed "code...") st1
-        appStreamingText st2 `shouldBe` "Generating code..."
-        appStatus st2 `shouldBe` StatusStreaming
-        let st3 = handleCustomAppEvent TurnCompleted st2
-        appStreamingText st3 `shouldBe` ""
-        appMessages st3 `shouldBe` [AssistantMsg "Generating code..." []]
-        appStatus st3 `shouldBe` StatusIdle
-        amTurnCount (appMetrics st3) `shouldBe` 1
-
-      it "handles keyboard focus cycling and shortcuts" $ do
-        let st0 = initialAppState defaultTUIConfig Nothing
-        let (st1, a1) = handleVtyEventPure (Vty.EvKey (Vty.KChar '\t') []) st0
-        a1 `shouldBe` Just ActionFocusNext
-        focusGetCurrent (appFocusRing st1) `shouldBe` Just ViewportChat
-
-        let (st2, a2) = handleVtyEventPure (Vty.EvKey (Vty.KChar 'd') [Vty.MCtrl]) st1
-        a2 `shouldBe` Just (ActionFocusResource ViewportDiff)
-        focusGetCurrent (appFocusRing st2) `shouldBe` Just ViewportDiff
-
-      it "renders UI widgets without exceptions across diverse states" $ do
-        let st0 = initialAppState defaultTUIConfig Nothing
-        let st1 = submitPromptPure "Refactor code" st0
-        let st2 = handleCustomAppEvent (TokenStreamed "Refactoring in progress") st1
-        let st3 = handleCustomAppEvent (DiffUpdated "--- a/f.hs\n+++ b/f.hs\n@@ -1 +1 @@\n-1\n+2\n") st2
-        let ws = drawUI st3
-        length ws `shouldBe` 1
-
   ---------------------------------------------------------------------------
   -- Tier 2: Boundary & Corner Cases
   ---------------------------------------------------------------------------
@@ -497,7 +449,7 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
           Left err -> expectationFailure ("Grep special failed: " <> T.unpack err)
           Right gsr -> gsrTotalCount gsr `shouldBe` 1
 
-    describe "4. Subagent & TUI Boundary Conditions" $ do
+    describe "4. Subagent Boundary Conditions" $ do
       it "strips subagentTool from child tools to prevent recursive fork-bombs" $ do
         let tools = standardCodingTools @'[World, Journal, LLM, IOE] ++ [subagentTool standardCodingTools]
         let filtered = filterSubagentTools (SubagentArgs "child" Nothing Nothing Nothing Nothing) tools
@@ -523,18 +475,6 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
           (_, wtList, _) <- readProcessWithExitCode "git" ["-C", repoDir, "worktree", "list", "--porcelain"] ""
           let count = length (filter ("worktree " `T.isPrefixOf`) (T.lines (T.pack wtList)))
           count `shouldBe` 1
-
-      it "TUI ignores empty prompts on Enter submission" $ do
-        let st0 = initialAppState defaultTUIConfig Nothing
-        let (st1, act) = handleVtyEventPure (Vty.EvKey Vty.KEnter []) st0
-        act `shouldBe` Just ActionNone
-        appMessages st1 `shouldBe` []
-        appStatus st1 `shouldBe` StatusIdle
-
-      it "TUI handles unicode and emoji in token streams" $ do
-        let st0 = initialAppState defaultTUIConfig Nothing
-        let st1 = handleCustomAppEvent (TokenStreamed "🚀 Haskell effectful 中文 🤖") st0
-        appStreamingText st1 `shouldBe` "🚀 Haskell effectful 中文 🤖"
 
   ---------------------------------------------------------------------------
   -- Tier 3: Cross-Feature Interactions
@@ -600,31 +540,6 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
             rsToolInvocations summary `shouldBe` 2
             rsToolCompletions summary `shouldBe` 2
             rsIsValidSequence summary `shouldBe` True
-
-    it "Interaction 3: TUI state machine processes editFile tool execution and renders visual diff" $ do
-      let st0 = initialAppState defaultTUIConfig Nothing
-      let st1 = submitPromptPure "Refactor API router" st0
-      let editArgs = toJSON (EditFileArgs "src/Router.hs" Nothing "oldRoute" "newRoute" Nothing Nothing Nothing)
-      let st2 = handleCustomAppEvent (ToolStarted "edit_file" editArgs) st1
-      appStatus st2 `shouldBe` StatusRunningTool "edit_file"
-
-      let diffSnippet = "--- a/src/Router.hs\n+++ b/src/Router.hs\n@@ -10,1 +10,1 @@\n-oldRoute\n+newRoute\n"
-      let toolRes = Right (object ["diffSnippet" .= diffSnippet, "replaced" .= (1 :: Int)])
-      let st3 = handleCustomAppEvent (ToolFinished "edit_file" toolRes) st2
-
-      case appDiffState st3 of
-        Nothing -> expectationFailure "Expected visual diff state to be updated"
-        Just ds -> vdsContent ds `shouldBe` diffSnippet
-
-      let st4 = handleCustomAppEvent (TokenStreamed "Router refactored.") st3
-      let st5 = handleCustomAppEvent TurnCompleted st4
-      appStatus st5 `shouldBe` StatusIdle
-      appMessages st5 `shouldBe`
-        [ UserMsg "Refactor API router"
-        , AssistantMsg "Router refactored." []
-        ]
-      let ws = drawUI st5
-      length ws `shouldBe` 1
 
     it "Interaction 4: Error recovery lifecycle with tool failure and self-correction" $ do
       let script =
@@ -802,61 +717,12 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
           Left err -> expectationFailure ("Final audit failed: " <> T.unpack err)
           Right s  -> rsTotalTurns s `shouldBe` 2
 
-    it "Scenario 5: Interactive TUI Prompt & Streaming Workflow" $ do
-      let st0 = initialAppState defaultTUIConfig Nothing
-      -- 1. User submits prompt
-      let st1 = submitPromptPure "Refactor user authentication handler" st0
-      appStatus st1 `shouldBe` StatusThinking
-      appMessages st1 `shouldBe` [UserMsg "Refactor user authentication handler"]
-
-      -- 2. Agent invokes editFile tool
-      let editArgs = toJSON (EditFileArgs "src/Auth.hs" Nothing "checkPassword" "verifyPasswordHash" Nothing Nothing Nothing)
-      let st2 = handleCustomAppEvent (ToolStarted "editFile" editArgs) st1
-      appStatus st2 `shouldBe` StatusRunningTool "editFile"
-
-      -- 3. Tool produces unified diff
-      let diff = "--- a/src/Auth.hs\n+++ b/src/Auth.hs\n@@ -25,1 +25,1 @@\n-checkPassword\n+verifyPasswordHash\n"
-      let st3 = handleCustomAppEvent (ToolFinished "editFile" (Right (object ["diff" .= diff]))) st2
-      case appDiffState st3 of
-        Nothing -> expectationFailure "Expected visual diff in TUI"
-        Just ds -> vdsContent ds `shouldBe` diff
-
-      -- 4. Agent streams explanation tokens
-      let st4 = handleCustomAppEvent (TokenStreamed "I updated ") st3
-      let st5 = handleCustomAppEvent (TokenStreamed "checkPassword to verifyPasswordHash.") st4
-      appStreamingText st5 `shouldBe` "I updated checkPassword to verifyPasswordHash."
-
-      -- 5. Turn completes
-      let st6 = handleCustomAppEvent TurnCompleted st5
-      appStatus st6 `shouldBe` StatusIdle
-      appMessages st6 `shouldBe`
-        [ UserMsg "Refactor user authentication handler"
-        , AssistantMsg "I updated checkPassword to verifyPasswordHash." []
-        ]
-
-      -- 6. User navigates diff pane and clears it
-      let (st7, _) = handleVtyEventPure (Vty.EvKey (Vty.KChar 'd') [Vty.MCtrl]) st6
-      focusGetCurrent (appFocusRing st7) `shouldBe` Just ViewportDiff
-      let (st8, aClear) = handleVtyEventPure (Vty.EvKey (Vty.KChar 'x') [Vty.MCtrl]) st7
-      aClear `shouldBe` Just ActionClearDiff
-      appDiffState st8 `shouldBe` Nothing
-
   ---------------------------------------------------------------------------
   -- Tier 5: Adversarial Hardening
   ---------------------------------------------------------------------------
   describe "Tier 5: Adversarial Hardening" $ do
 
-    it "Stress 1: High-Volume 10,000 Micro-Token Streaming into TUI" $ do
-      let st0 = initialAppState defaultTUIConfig Nothing
-      let chunks = [T.singleton c | c <- take 10000 (cycle ['a'..'z'])]
-      let finalSt = foldl (\s chunk -> handleCustomAppEvent (TokenStreamed chunk) s) st0 chunks
-      appStatus finalSt `shouldBe` StatusStreaming
-      T.length (appStreamingText finalSt) `shouldBe` 10000
-      let completedSt = handleCustomAppEvent TurnCompleted finalSt
-      appStatus completedSt `shouldBe` StatusIdle
-      length (appMessages completedSt) `shouldBe` 1
-
-    it "Stress 2: Massive Multi-Turn Session (100 Turns / 500 Events)" $ do
+    it "Stress 1: Massive Multi-Turn Session (100 Turns / 500 Events)" $ do
       let n = 100
       let program = do
             forM_ [1 .. n] $ \(i :: Int) -> do
@@ -879,7 +745,7 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
           rsModelTurns s `shouldBe` n
           rsIsValidSequence s `shouldBe` True
 
-    it "Stress 3: Concurrent Multi-Worker Local File Operations" $ do
+    it "Stress 2: Concurrent Multi-Worker Local File Operations" $ do
       withSystemTempDirectory "e2e-adv-concurrent-local" $ \tmpDir -> do
         let numThreads = 10
         runEff $ runWorldLocal tmpDir $ do
@@ -898,7 +764,7 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
             c <- readFileText fn
             liftIO $ c `shouldBe` ("init_" <> T.pack (show (i :: Int)) <> "_done")
 
-    it "Stress 4: Concurrent Git Worktree Sandboxes Without Leaks" $ do
+    it "Stress 3: Concurrent Git Worktree Sandboxes Without Leaks" $ do
       withSystemTempDirectory "e2e-adv-concurrent-wt" $ \repoDir -> do
         _ <- readProcessWithExitCode "git" ["-C", repoDir, "init"] ""
         _ <- readProcessWithExitCode "git" ["-C", repoDir, "config", "user.email", "e2e@llmonad.org"] ""
@@ -918,18 +784,3 @@ spec = describe "LLMonad E2E Master Test Suite (Milestone 5)" $ do
         (_, wtList, _) <- readProcessWithExitCode "git" ["-C", repoDir, "worktree", "list", "--porcelain"] ""
         let wtEntries = filter ("worktree " `T.isPrefixOf`) (T.lines (T.pack wtList))
         length wtEntries `shouldBe` 1
-
-    it "Stress 5: Extreme TUI Layout with 500 Messages, 500 Logs, and Large Diff" $ do
-      let msgs = [if even i then UserMsg ("Q" <> T.pack (show i)) else AssistantMsg ("A" <> T.pack (show i)) [] | i <- [1..500 :: Int]]
-      let logs = [ToolLogEntry ("tool_" <> T.pack (show i)) (object ["idx" .= i]) (Just (Right (object ["ok" .= True]))) "done" | i <- [1..500 :: Int]]
-      let diff = T.unlines ["+ diff line " <> T.pack (show i) | i <- [1..1000 :: Int]]
-      let st = (initialAppState defaultTUIConfig Nothing)
-            { appMessages = msgs
-            , appToolLogs = logs
-            , appDiffState = Just (VisualDiffState diff (Just "extreme.hs"))
-            , appStreamingText = "Streaming active data..."
-            , appStatus = StatusStreaming
-            , appMetrics = AppMetrics 10000 50000 60000 120.0 500
-            }
-      let ws = drawUI st
-      length ws `shouldBe` 1
