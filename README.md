@@ -1,73 +1,73 @@
 # LLMonad
 
-LLMonad is an Effectful library for typed agents, tools, and workflows:
-agents call tools, and workflows compose agents.
+LLMonad is an [Effectful](https://github.com/haskell-effectful/effectful)
+library for typed LLM agents, tools, and workflows: agents call tools, and
+workflows compose agents. It has one rule: workflow code never names a
+provider, a model, or an HTTP detail. Agents are values, workflows are plain
+functions over them, and a model attaches only at the program edge — so the
+same workflow runs against a live provider, a scripted mock, or a recorded
+session.
 
-- `runWorldLocal "./workspace"` resolves every path a tool touches inside
-  that root and fails on anything else. Other interpreters serve files from
-  memory or run them in a throwaway Git worktree.
+## The whole program at a glance
 
-  ```haskell
-  runEff . runWorldLocal "./workspace" $ invoke researcher "summarize the README"
-  -- paths outside ./workspace fail; runWorldMemoryWithFiles and
-  -- runWorldWorktree are other interpreters
-  ```
-
-- `mount` a scripted model instead of a live provider and the same workflow
-  runs in tests, with no network and no disk.
-
-  ```haskell
-  let researcher =
-        mount (mockModel [Right (textResp "evidence")]) researchTools researcherDef
-  -- scripted answers instead of a provider; only the mount argument changes
-  ```
-
-- Workflow code never names a provider, a model, or an HTTP detail. Agents
-  are values; workflows are functions taking them.
-
-  ```haskell
-  workflow :: Agent es Text Text -> Agent es Text Text -> Eff es Text
-  workflow researcher reviewer =
-    invoke researcher "read the project" >>= invoke reviewer
-  ```
-
-How to read the signatures:
-
-- Notation:
-  - `Eff es` is a computation whose allowed effects are listed in `es`.
-  - `World :> es` reads as "World is available in es".
-- Where effects come from:
-  - The effect system is
-    [Effectful](https://github.com/haskell-effectful/effectful); `IOE` is its
-    effect for raw `IO`.
-  - `World` and `Journal` are LLMonad's own:
-    - `World` is the machine: files, directories, commands.
-    - `Journal` is the session log: model turns and tool calls, recorded as
-      they happen.
-- The program edge:
-  - Wherever your code calls a `run...` interpreter: `runEff`,
-    `runWorldLocal`, and friends.
-  - Above the edge, effects exist only in types; below it, they become real
-    work.
-
-## Define the agents
+One agent, one tool, one model:
 
 ```haskell
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators #-}
 
-import Data.Aeson (FromJSON)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Effectful
-import GHC.Generics (Generic)
 import LLMonad
 import System.Environment (getEnv)
 
+-- The definition: what the agent is. No model appears here.
+readerDef :: AgentDef Text Text
+readerDef = textAgent "Inspect the project and answer from its files." id
+
+main :: IO ()
+main = do
+  key <- T.pack <$> getEnv "DEEPSEEK_API_KEY"
+  -- The edge: the only lines that name a provider and a model.
+  let runtime = model (deepSeekProvider key) "deepseek-v4-flash"
+      reader = mount runtime (tools [viewFileTool]) readerDef
+  reply <- runEff . runWorldLocal "." $ invoke reader "Summarize README.md."
+  TIO.putStrLn reply
+```
+
+Four names carry the program:
+
+- `textAgent` builds an `AgentDef`: the agent's system prompt, how inputs
+  become prompt text, and that it answers in plain text.
+- `mount` turns a definition into a callable `Agent` by attaching a model
+  runtime and a toolset. It is the only place a provider is named.
+- `invoke` calls the agent once, starting from an empty conversation.
+- `runEff . runWorldLocal "."` is the program edge: above it, effects exist
+  only in types; here they become real work. `runWorldLocal` interprets file
+  access and confines every path to the root you give it.
+
+## The same program in a test
+
+Swap the arguments to `mount` and the `World` interpreter; nothing else
+changes. `mockModel` answers from a script, and the in-memory world serves
+files from a list, so the test touches neither network nor disk:
+
+```haskell
+reply <-
+  runEff . fmap fst . runWorldMemoryWithFiles [("README.md", "hello")] $
+    invoke
+      (mount (mockModel [Right (textResp "a greeting")]) (tools [viewFileTool]) readerDef)
+      "Summarize README.md."
+```
+
+That swap is the point of the library. The rest of this README builds a
+two-agent workflow and introduces each part — definitions, tools, models,
+tests — in the order the code needs them.
+
+## Define the agents
+
+```haskell
 researcherDef :: AgentDef Text Text
 researcherDef =
   textAgent "Inspect the project and report evidence from its files." id
@@ -76,25 +76,32 @@ reviewerDef :: AgentDef Text Text
 reviewerDef =
   textAgent "Check the report for unsupported claims." id
 
-workflow ::
-  IOE :> es =>
-  Agent es Text Text ->
-  Agent es Text Text ->
-  Eff es Text
-workflow researcher reviewer = do
-  (overview, tests) <-
-    concurrently
-      (invoke researcher "Read the main modules.")
-      (invoke researcher "Read the tests.")
-  invoke reviewer (overview <> "\n\n" <> tests)
+workflow :: Agent es Text Text -> Agent es Text Text -> Eff es Text
+workflow researcher reviewer =
+  invoke researcher "Read the main modules." >>= invoke reviewer
 ```
 
 An `AgentDef` is one agent's specification: its system prompt, how inputs
 become prompt text, and whether it answers with plain text or structured
-data. It names no model; `mount` in a later section attaches one.
+data. It names no model; `mount` attaches one at the edge.
 
-`invoke` starts with an empty conversation. The two `invoke` calls above run
-concurrently and share nothing.
+`Eff es` is an Effectful computation whose allowed effects are listed in
+`es`. A workflow is such a computation over the agents it receives as
+arguments — nothing more, so ordinary combinators apply. To research two
+areas at once, replace the body with:
+
+```haskell
+(overview, tests) <-
+  concurrently
+    (invoke researcher "Read the main modules.")
+    (invoke researcher "Read the tests.")
+invoke reviewer (overview <> "\n\n" <> tests)
+```
+
+The two `invoke` calls run concurrently and share nothing: each starts from
+an empty conversation. `concurrently` needs raw `IO`, so the signature gains
+`IOE :> es` — read `:>` as "is available in". `IOE` is Effectful's effect
+for raw `IO`.
 
 ## Give each agent its tools
 
@@ -109,17 +116,21 @@ researchTools =
     <> tools [countLinesTool]
 ```
 
-Tool handlers run in `Eff`, so the effects a tool needs stay in the type of the
-toolset. `viewFileTool` reads files through `World`, which is why
-`researchTools` carries `World :> es`. The constraint
-follows the agent around until the program interprets `World` at the edge,
-which is also why the reviewer below never touches the disk.
+`World` is LLMonad's effect for the machine: files, directories, commands.
+Tool handlers run in `Eff`, so the effects a tool needs stay in the type of
+the toolset. `viewFileTool` reads files through `World`, which is why
+`researchTools` carries `World :> es`. The constraint follows the agent
+around until the program interprets `World` at the edge, which is also why
+the reviewer below never touches the disk.
 
 Write your own tool by wrapping a function whose argument type derives
 `FromJSON` and `ToSchema`. The derived schema is what the model sees; the
 result is encoded as JSON and handed back to it.
 
 ```haskell
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+
 data CountLines = CountLines {file :: Text}
   deriving (Generic, FromJSON, ToSchema)
 
@@ -209,8 +220,14 @@ report <-
 - Only the arguments to `mount` differ from production. The workflow under
   test is the shipped code.
 
-For a record after the fact, add the `Journal` effect:
-`runJournalFile "session.jsonl"` persists every recorded turn and tool call.
+### Record a session
+
+`Journal` is LLMonad's session log effect: model turns and tool calls,
+recorded as they happen. Interpret it with `runJournalFile "session.jsonl"`
+and every recorded turn and tool call persists to that file.
+
+### Replay a recording as a regression test
+
 A recording doubles as a regression test:
 
 - every recorded model turn and tool invocation plays back, in order
@@ -220,6 +237,7 @@ A recording doubles as a regression test:
   shifting every later answer
 
 ```haskell
+events <- runEff (resumeSession "session.jsonl")
 let script = extractReplayScript events
 runtime <- strictReplayRuntime script
 replayResearchTools <- strictReplayToolset script researchTools
@@ -240,7 +258,7 @@ first <- continue chat "Read README.md."
 second <- continue chat "Now check the source against that description."
 ```
 
-## Ask for a record instead of text
+## Ask for structured output
 
 `structuredAgent` demands JSON that fits a derived schema, and retries the
 model when the reply does not decode.
@@ -255,6 +273,8 @@ data Verdict = Verdict
 verdictDef :: AgentDef Text Verdict
 verdictDef = structuredAgent "Report the single worst problem in the file." id
 ```
+
+## Cap the rounds
 
 A round is one model reply plus the tool calls that reply requested. An
 agent gives up after eight; raise the ceiling per definition:
