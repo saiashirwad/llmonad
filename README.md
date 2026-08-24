@@ -1,10 +1,22 @@
 # LLMonad
 
-LLMonad is an Effectful library for typed agents, tools, and workflows.
+LLMonad is an Effectful library for typed agents, tools, and workflows, built
+around one guarantee: **a tool declares the effects it needs, those
+requirements travel with the tool in its type, and they discharge exactly
+once — at the program edge, where an interpreter picks the semantics.**
 
-An `AgentDef` says what an agent does. `mount` gives that definition a model and
-a toolset. A workflow takes configured agents as arguments, so workflow code
-never names a provider, a model, or an HTTP detail.
+What follows from that:
+
+- **Confinement is chosen by the interpreter, not begged for in a prompt.**
+  Run under `runWorldLocal "./workspace"` and every path a tool touches
+  resolves inside that root; anything else fails. Swap the interpreter and the
+  same agent runs against in-memory files or a throwaway Git worktree.
+- **Testing is an argument swap.** The same `mount` call that attaches a live
+  provider can attach a scripted model, so the workflow your tests exercise is
+  the workflow that ships — no network, no disk.
+- **Workflow code never names a provider, model, or HTTP detail.** An
+  `AgentDef` says what an agent does; `mount` gives that definition a model and
+  a toolset; workflows are plain functions taking configured agents.
 
 ## Define the agents
 
@@ -18,9 +30,11 @@ never names a provider, a model, or an HTTP detail.
 import Data.Aeson (FromJSON)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
 import Effectful
 import GHC.Generics (Generic)
 import LLMonad
+import System.Environment (getEnv)
 
 researcherDef :: AgentDef Text Text
 researcherDef =
@@ -62,7 +76,8 @@ researchTools =
 Tool handlers run in `Eff`, so the effects a tool needs stay in the type of the
 toolset. `viewFileTool` reads files through the `World` effect, which is why
 `researchTools` carries `World :> es`. That constraint follows the agent
-around until the program interprets `World` at the edge.
+around until the program interprets `World` at the edge — which is also how
+the reviewer below ends up unable to touch the disk at all.
 
 Write your own tool by wrapping a function whose argument type derives
 `FromJSON` and `ToSchema`. The derived schema is what the model sees; the
@@ -116,15 +131,45 @@ Three things happen in that `let`:
 
 - Each agent gets a model. `mount` is the only place a provider is named, so
   giving the reviewer a different `runtime` mixes models in one workflow.
-- Each agent gets its own tools. The researcher reads the project; the reviewer
-  cannot touch the disk at all.
+- Each agent gets its own tools. The researcher reads the project; the
+  reviewer cannot touch the disk at all.
 - `runWorldLocal "."` interprets `World`, discharging the constraint the
-  toolset carried. It also confines every tool to that directory: a path
-  outside the root fails instead of reading the wider filesystem.
+  toolset carried.
 
-Other interpreters answer the same effect: `runWorldMemoryWithFiles` serves
-files from memory, `runWorldWorktree` runs the agent in a throwaway Git
-worktree.
+### Every path stays inside the root
+
+`runWorldLocal` canonicalizes the root you give it, and every file operation
+resolves through it. A tool asked for `../../etc/passwd` or an absolute path
+outside the root gets an error, not your filesystem.
+
+The same `World` effect has other interpreters, and swapping them changes
+nothing above:
+
+- `runWorldMemoryWithFiles` serves files from memory — no disk involved.
+- `runWorldWorktree` runs the computation inside an ephemeral Git worktree
+  that is removed afterward, returning a summary of what changed.
+
+## Test without a provider
+
+`mockModel` is a `ModelRuntime` backed by a script. Pair it with the
+in-memory `World` and the production workflow runs in a test touching neither
+network nor disk:
+
+```haskell
+report <-
+  runEff . fmap fst . runWorldMemoryWithFiles [("README.md", "hello")] $
+    workflow
+      (mount (mockModel [Right (textResp "evidence")]) researchTools researcherDef)
+      (mount (mockModel [Right (textResp "no unsupported claims")]) noTools reviewerDef)
+```
+
+Each script restarts for every invocation, which keeps independent agent calls
+deterministic. Only the arguments to `mount` differ from production — the
+workflow under test is the shipped code.
+
+When a run must be inspectable after the fact, add the `Journal` effect:
+`runJournalFile "session.jsonl"` persists every recorded turn and tool call,
+and `resumeSession "session.jsonl"` reads the events back.
 
 ## Keep a conversation
 
@@ -174,24 +219,6 @@ let runtime =
         (traced print <> cached "deepseek-v4-flash" store <> rateLimited limiter)
         (model (deepSeekProvider key) "deepseek-v4-flash")
 ```
-
-## Test without a provider
-
-`mockModel` is a `ModelRuntime` backed by a script, so the workflow under test
-is the same code that runs in production — only the argument to `mount` changes.
-Pair it with the in-memory `World` and the test touches neither network nor
-disk.
-
-```haskell
-report <-
-  runEff . fmap fst . runWorldMemoryWithFiles [("README.md", "hello")] $
-    workflow
-      (mount (mockModel [Right (textResp "evidence")]) researchTools researcherDef)
-      (mount (mockModel [Right (textResp "no unsupported claims")]) noTools reviewerDef)
-```
-
-Each script restarts for every invocation, which keeps independent agent calls
-deterministic.
 
 ## Examples
 
