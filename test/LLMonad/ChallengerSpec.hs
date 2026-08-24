@@ -513,7 +513,7 @@ spec = do
                     , repeatCall
                     , Right (textResp "Settled after multiple warnings")
                     ]
-            (answer, _, hist, _) <- runEff $ runLLMMockFull script (runAgent [addTool] "Run with repeated calls")
+            (answer, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoop [addTool] "Run with repeated calls")
             answer `shouldBe` "Settled after multiple warnings"
             let warnings = [m | UserMsg m <- hist, "Repeated identical tool call signature detected" `T.isInfixOf` m]
             length warnings `shouldBe` 2
@@ -527,26 +527,26 @@ spec = do
                     , call1
                     , Right (textResp "Completed non-cyclical calls")
                     ]
-            (answer, _, hist, _) <- runEff $ runLLMMockFull script (runAgent [addTool] "Run alternating calls")
+            (answer, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoop [addTool] "Run alternating calls")
             answer `shouldBe` "Completed non-cyclical calls"
             let warnings = [m | UserMsg m <- hist, "Repeated identical tool call signature detected" `T.isInfixOf` m]
             length warnings `shouldBe` 0
 
-        it "runAgentStructured self-corrects when model returns malformed JSON before settling" $ do
+        it "runStructuredLoop self-corrects when model returns malformed JSON before settling" $ do
             let call1 = Right (toolResp [ToolCall "c1" "add" (object ["addX" .= (10 :: Int), "addY" .= (20 :: Int)])])
                 badJsonResp = Right (textResp "This is not valid JSON at all")
                 validJsonResp = Right (structuredResp (object ["resSum" .= (30 :: Int), "resTag" .= ("summed" :: Text)]))
                 script = [call1, badJsonResp, validJsonResp]
-            (res, _, hist, _) <- runEff $ runLLMMockFull script (runAgentStructured @StructuredResult [addTool] "Add and return structured")
+            (res, _, hist, _) <- runEff $ runLLMMockFull script (runStructuredLoop @StructuredResult [addTool] "Add and return structured")
             res `shouldBe` StructuredResult 30 "summed"
             let feedback = [m | UserMsg m <- hist, "Your final response could not be decoded" `T.isInfixOf` m]
             length feedback `shouldBe` 1
 
-        it "runAgentStructured throws DecodeError when rounds run out on persistent invalid JSON" $ do
+        it "runStructuredLoop throws DecodeError when rounds run out on persistent invalid JSON" $ do
             let badJsonResp = Right (textResp "Still broken JSON")
                 opts = defaultAgentOpts{agentMaxRounds = 2}
                 script = [badJsonResp, badJsonResp]
-            res <- try (runEff $ runLLMMockFull script (runAgentStructuredWith @StructuredResult opts [addTool] "Task"))
+            res <- try (runEff $ runLLMMockFull script (runStructuredLoopWith @StructuredResult opts [addTool] "Task"))
             case res of
                 Left (DecodeError _ _) -> pure ()
                 Left other -> expectationFailure ("Expected DecodeError, got: " <> show other)
@@ -555,7 +555,7 @@ spec = do
         it "Captures tool' custom error strings and feeds them back as ToolMsg error objects" $ do
             let callFail = Right (toolResp [ToolCall "c1" "fail_tool" (object ["addX" .= (1 :: Int), "addY" .= (2 :: Int)])])
                 script = [callFail, Right (textResp "Recovered after tool error")]
-            (answer, _, hist, _) <- runEff $ runLLMMockFull script (runAgent [failTool] "Call failing tool")
+            (answer, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoop [failTool] "Call failing tool")
             answer `shouldBe` "Recovered after tool error"
             let toolMsgs = [c | ToolMsg _ c <- hist]
             toolMsgs `shouldSatisfy` any (T.isInfixOf "Simulated tool failure")

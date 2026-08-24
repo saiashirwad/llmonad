@@ -42,31 +42,36 @@ $(return [])
 taxTool :: ToolIO
 taxTool = $(makeTool 'computeTax)
 
-workflow :: (LLM :> es, IOE :> es) => Eff es ()
-workflow = do
-    liftIO (putStrLn "--- 1. Compile-Time [prompt| ... |] Interpolation ---")
+{- | Wire the generated tool onto any model runtime. This is the only place a
+model is named; swapping DeepSeek, OpenAI, or a mock script changes nothing else.
+-}
+taxAgent :: ModelRuntime es -> Agent es Text Text
+taxAgent runtime =
+    bind
+        runtime
+        (tools [hoistTool liftIO taxTool])
+        (textAgent "Answer sales-tax questions using the provided tool." id)
+
+query :: Text
+query =
     let customerName = "Alice" :: Text
         item = "Laptop" :: Text
         price = 1200.00 :: Double
-        query = [prompt|Customer #{customerName} purchased #{item} for $#{price}. Compute the applicable sales tax in Germany.|]
-    liftIO (TIO.putStrLn ("Interpolated Prompt:\n" <> query <> "\n"))
-
-    liftIO (putStrLn "--- 2. Autonomous Execution with makeTool Splice ---")
-    answer <- runAgent [liftTool taxTool] query
-    liftIO (TIO.putStrLn ("Agent Answer:\n" <> answer))
+     in [prompt|Customer #{customerName} purchased #{item} for $#{price}. Compute the applicable sales tax in Germany.|]
 
 main :: IO ()
 main = do
     mKey <- lookupEnv "OPENAI_API_KEY"
     case mKey of
         Just k -> do
-            let cfg = defaultConfig (openAIProvider (T.pack k)) "gpt-4o-mini"
-            runEff (runLLMHTTP cfg workflow)
+            putStrLn "--- Live: OpenAI with makeTool Splice ---"
+            reply <- runEff (invoke (taxAgent (model (openAIProvider (T.pack k)) "gpt-4o-mini")) query)
+            TIO.putStrLn ("Agent Answer:\n" <> reply)
         Nothing -> do
             putStrLn "Note: OPENAI_API_KEY not set; executing against pure in-memory mock handler.\n"
             let script =
                     [ Right (toolResp [ToolCall "call-1" "computeTax" (toJSON (TaxLookupArgs "DE" 1200.00))])
                     , Right (textResp "The applicable sales tax for Germany (19%) on a $1200 Laptop is $228.00.")
                     ]
-            (res, _) <- runEff (runLLMMock script workflow)
-            pure res
+            reply <- runEff (invoke (taxAgent (mockModel script)) query)
+            TIO.putStrLn ("Agent Answer:\n" <> reply)

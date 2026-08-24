@@ -31,6 +31,7 @@ library
         LLMonad.Providers.Anthropic
         LLMonad.Interpreter.HTTP
         LLMonad.Interpreter.Mock
+        LLMonad.Middleware
         LLMonad.Middleware.Cache
         LLMonad.Middleware.Trace
         LLMonad.Middleware.RateLimit
@@ -167,6 +168,29 @@ executable deepseek-ask-project
         llmonad,
         text >=1.2 && <2.2
 
+executable deepseek-review-file
+    main-is:            DeepSeekReviewFile.hs
+    hs-source-dirs:     examples
+    default-language:   GHC2021
+    default-extensions:
+        DataKinds DeriveAnyClass DeriveGeneric DerivingStrategies
+        FlexibleContexts FlexibleInstances GADTs GeneralizedNewtypeDeriving
+        LambdaCase MultiParamTypeClasses OverloadedStrings RecordWildCards
+        ScopedTypeVariables TypeApplications TypeFamilies TypeOperators
+        UndecidableInstances
+
+    ghc-options:
+        -Wall -Wcompat -Widentities -Wincomplete-record-updates
+        -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields
+        -Wredundant-constraints
+
+    build-depends:
+        base >=4.16 && <5,
+        aeson >=2.0 && <3,
+        effectful >=2.5 && <2.7,
+        llmonad,
+        text >=1.2 && <2.2
+
 test-suite llmonad-test
     type:               exitcode-stdio-1.0
     main-is:            Spec.hs
@@ -182,6 +206,7 @@ test-suite llmonad-test
         LLMonad.MockSpec
         LLMonad.AgentSpec
         LLMonad.CompositionSpec
+        LLMonad.MiddlewareSpec
         LLMonad.CurriedAPISpec
         LLMonad.StructuredSpec
         LLMonad.PromptSpec

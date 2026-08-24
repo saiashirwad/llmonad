@@ -7,13 +7,18 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
--- | Higher-order middleware for caching LLM responses.
+{- | Higher-order middleware for caching LLM responses.
+
+Attach to a single agent's runtime with 'cached', or scope over an entire
+effect block with 'withCache'. Both spellings share 'cacheHandler'.
+-}
 module LLMonad.Middleware.Cache (
     CacheStore (..),
     newInMemoryCache,
     withCache,
     withCacheModel,
     isCacheableResponse,
+    cached,
 ) where
 
 import Control.Monad (when)
@@ -24,6 +29,8 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import LLMonad.Core
+import LLMonad.Middleware (Middleware (..))
+import LLMonad.Model (ModelRuntime (..))
 import LLMonad.Types
 
 -- | Abstract interface for cache storage.
@@ -61,19 +68,20 @@ newInMemoryCache = do
                     else pure ()
             }
 
--- | Interpose caching middleware on the LLM effect with default model identity.
-withCache :: (LLM :> es, IOE :> es) => CacheStore -> Eff es a -> Eff es a
-withCache = withCacheModel (Model "default-model")
+{- | Handler interposing caching on the 'LLM' effect.
 
--- | Interpose caching middleware on the LLM effect with an explicit model identity.
-withCacheModel :: (LLM :> es, IOE :> es) => Model -> CacheStore -> Eff es a -> Eff es a
-withCacheModel model store = interpose_ $ \case
+A cached hit replays the assistant message into history and never reaches
+the wrapped interpreter, so sibling middleware inside 'cached' observes
+nothing on hits.
+-}
+cacheHandler :: forall es. (LLM :> es, IOE :> es) => Model -> CacheStore -> EffectHandler_ LLM es
+cacheHandler identity store = \case
     ChatRound p fmt specs choice -> do
         sys <- getSystem
         hist <- getHistory
         let req =
                 CompletionRequest
-                    { crModel = model
+                    { crModel = identity
                     , crSystem = sys
                     , crMessages = hist
                     , crParams = p
@@ -99,3 +107,17 @@ withCacheModel model store = interpose_ $ \case
     GetSystem -> send GetSystem
     SetSystem sys -> send (SetSystem sys)
     ClearSystem -> send ClearSystem
+
+-- | Caching as first-class model middleware; attach to individual runtimes.
+cached :: (IOE :> es) => Model -> CacheStore -> Middleware es
+cached identity store = Middleware $ \(ModelRuntime run) ->
+    ModelRuntime $ \action ->
+        run (interpose_ (cacheHandler identity store) action)
+
+-- | Interpose caching middleware on the LLM effect with an explicit model identity.
+withCacheModel :: (LLM :> es, IOE :> es) => Model -> CacheStore -> Eff es a -> Eff es a
+withCacheModel identity store = interpose_ (cacheHandler identity store)
+
+-- | Interpose caching middleware on the LLM effect with default model identity.
+withCache :: (LLM :> es, IOE :> es) => CacheStore -> Eff es a -> Eff es a
+withCache = withCacheModel (Model "default-model")

@@ -110,7 +110,7 @@ spec = do
             res `shouldBe` Left "Negative coordinate not allowed"
 
     describe "Batch 3 Adversarial Suite: Message Ordering & Cycle Warning Invariants" $ do
-        it "guarantees ToolMsg precedes cycle warning UserMsg in useToolsWith" $ do
+        it "guarantees ToolMsg precedes cycle warning UserMsg in runTextLoopWith" $ do
             let repeatedCall = Right (toolResp [ToolCall "c1" "point_tool" (object ["px" .= (1 :: Int), "py" .= (2 :: Int)])])
                 script =
                     [ repeatedCall
@@ -118,7 +118,7 @@ spec = do
                     , Right (textResp "Finished after cycle warning")
                     ]
                 opts = defaultAgentOpts{agentMaxRounds = 5}
-            (_, _, hist, _) <- runEff $ runLLMMockFull script (useToolsWith opts [pointTool] "Do work")
+            (_, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoopWith opts [pointTool] "Do work")
             let msgs = [(i, m) | (i, m) <- zip [0 :: Int ..] hist]
             let toolMsgIndices = [i | (i, ToolMsg _ _) <- msgs]
             let warnMsgIndices = [i | (i, UserMsg t) <- msgs, "Repeated identical tool call" `T.isInfixOf` t]
@@ -129,7 +129,7 @@ spec = do
                 (w : _, t : _) -> w `shouldSatisfy` (> t)
                 _ -> expectationFailure "Expected warning and tool messages"
 
-        it "guarantees all parallel ToolMsgs precede cycle warning UserMsg in runAgentWith" $ do
+        it "guarantees all parallel ToolMsgs precede cycle warning UserMsg in runTextLoopWith" $ do
             let parallelCalls =
                     Right
                         ( toolResp
@@ -142,7 +142,7 @@ spec = do
                     , parallelCalls
                     , Right (textResp "Finished parallel cycle")
                     ]
-            (_, _, hist, _) <- runEff $ runLLMMockFull script (runAgentWith defaultAgentOpts [pointTool] "Do parallel")
+            (_, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoopWith defaultAgentOpts [pointTool] "Do parallel")
             let msgs = [(i, m) | (i, m) <- zip [0 :: Int ..] hist]
             let toolMsgIndices = [i | (i, ToolMsg _ _) <- msgs]
             let warnMsgIndices = [i | (i, UserMsg t) <- msgs, "Repeated identical tool call" `T.isInfixOf` t]
@@ -153,7 +153,7 @@ spec = do
                 (w : _, _ : _ : _ : t3 : _) -> w `shouldSatisfy` (> t3)
                 _ -> expectationFailure "Expected warning and 4 tool messages"
 
-        it "runAgent structured loop records tool results before cycle warnings" $ do
+        it "runTextLoop structured loop records tool results before cycle warnings" $ do
             let repeatedCall = Right (toolResp [ToolCall "c1" "point_tool" (object ["px" .= (3 :: Int), "py" .= (4 :: Int)])])
                 finalResp = Right (structuredResp (object ["calculation" .= (25 :: Int), "status" .= ("done" :: Text)]))
                 script =
@@ -161,7 +161,7 @@ spec = do
                     , repeatedCall
                     , finalResp
                     ]
-            (res, _, hist, _) <- runEff $ runLLMMockFull script (runAgentStructured @FinalResult [pointTool] "Calculate and return")
+            (res, _, hist, _) <- runEff $ runLLMMockFull script (runStructuredLoop @FinalResult [pointTool] "Calculate and return")
             res `shouldBe` FinalResult 25 "done"
             let msgs = [(i, m) | (i, m) <- zip [0 :: Int ..] hist]
             let toolMsgIndices = [i | (i, ToolMsg _ _) <- msgs]
@@ -225,33 +225,33 @@ spec = do
                 Left e -> expectationFailure (show e)
 
     describe "Batch 3 Adversarial Suite: Structured Loops & Multi-Turn Transaction Rollback" $ do
-        it "runAgentStructured performs multi-turn tool execution before settling structured result" $ do
+        it "runStructuredLoop performs multi-turn tool execution before settling structured result" $ do
             let round1 = Right (toolResp [ToolCall "c1" "point_tool" (object ["px" .= (3 :: Int), "py" .= (4 :: Int)])])
                 round2 = Right (toolResp [ToolCall "c2" "list_tool" (object ["items" .= (["a", "b", "c"] :: [Text])])])
                 final = Right (structuredResp (object ["calculation" .= (25 :: Int), "status" .= ("processed 3 items" :: Text)]))
                 script = [round1, round2, final]
-            (res, _, hist, _) <- runEff $ runLLMMockFull script (runAgentStructured @FinalResult [pointTool, listTool] "Compute")
+            (res, _, hist, _) <- runEff $ runLLMMockFull script (runStructuredLoop @FinalResult [pointTool, listTool] "Compute")
             res `shouldBe` FinalResult 25 "processed 3 items"
             let toolContents = [c | ToolMsg _ c <- hist]
             length toolContents `shouldBe` 2
 
-        it "runAgentStructured rolls back staged messages completely on decode failure" $ do
+        it "runStructuredLoop rolls back staged messages completely on decode failure" $ do
             let badScript =
                     [ Right (toolResp [ToolCall "c1" "point_tool" (object ["px" .= (1 :: Int), "py" .= (2 :: Int)])])
                     , Right (textResp "Bad final JSON 1")
                     , Right (textResp "Bad final JSON 2")
                     ]
                 opts = defaultAgentOpts{agentMaxRounds = 2}
-            res <- try (runEff $ runLLMMockFull badScript (runAgentStructuredWith @FinalResult opts [pointTool] "Task"))
+            res <- try (runEff $ runLLMMockFull badScript (runStructuredLoopWith @FinalResult opts [pointTool] "Task"))
             case res of
                 Left (DecodeError _ _) -> pure ()
                 Left other -> expectationFailure ("Expected DecodeError, got: " <> show other)
                 Right _ -> expectationFailure "Expected DecodeError exception"
 
-        it "useToolsWith rolls back staged messages on exhausted rounds" $ do
+        it "runTextLoopWith rolls back staged messages on exhausted rounds" $ do
             let infiniteTool = repeat (Right (toolResp [ToolCall "c" "point_tool" (object ["px" .= (1 :: Int), "py" .= (1 :: Int)])]))
                 opts = defaultAgentOpts{agentMaxRounds = 2}
-            res <- try (runEff $ runLLMMockFull (take 10 infiniteTool) (useToolsWith opts [pointTool] "Task"))
+            res <- try (runEff $ runLLMMockFull (take 10 infiniteTool) (runTextLoopWith opts [pointTool] "Task"))
             case res of
                 Left (AgentRoundsExhausted 2) -> pure ()
                 Left other -> expectationFailure ("Expected AgentRoundsExhausted, got: " <> show other)

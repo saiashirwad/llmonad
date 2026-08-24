@@ -5,7 +5,7 @@
 
 -- | Configured model adapters for first-class agents.
 module LLMonad.Model (
-    ModelRuntime,
+    ModelRuntime (..),
     model,
     modelWithConfig,
     mockModel,

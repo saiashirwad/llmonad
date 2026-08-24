@@ -217,7 +217,7 @@ spec = do
             res `shouldBe` Left "Age cannot be negative"
 
     describe "Batch 3 Challenger Suite: Message Ordering On Repeated Tool Signatures" $ do
-        it "ensures ToolMsg strictly precedes warning UserMsg across multiple repeat cycles in useToolsWith" $ do
+        it "ensures ToolMsg strictly precedes warning UserMsg across multiple repeat cycles in runTextLoopWith" $ do
             let callVal =
                     object
                         [ "name" .= ("Repeater" :: Text)
@@ -233,7 +233,7 @@ spec = do
                     , Right (textResp "Settled final answer.")
                     ]
                 opts = defaultAgentOpts{agentMaxRounds = 6}
-            (res, _, hist, _) <- runEff $ runLLMMockFull script (useToolsWith opts [personTool] "Run repeated task")
+            (res, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoopWith opts [personTool] "Run repeated task")
             res `shouldBe` "Settled final answer."
 
             -- History verification:
@@ -260,7 +260,7 @@ spec = do
             warnIdx1 `shouldSatisfy` (< toolIdx3)
             toolIdx3 `shouldSatisfy` (< warnIdx2)
 
-        it "ensures ALL parallel ToolMsgs strictly precede warning UserMsg in runAgentWith" $ do
+        it "ensures ALL parallel ToolMsgs strictly precede warning UserMsg in runTextLoopWith" $ do
             let callVal1 = object ["name" .= ("P1" :: Text), "age" .= (21 :: Int), "isMember" .= True, "tags" .= ([] :: [Text])]
                 callVal2 = object ["name" .= ("P2" :: Text), "age" .= (22 :: Int), "isMember" .= True, "tags" .= ([] :: [Text])]
                 callVal3 = object ["name" .= ("P3" :: Text), "age" .= (23 :: Int), "isMember" .= True, "tags" .= ([] :: [Text])]
@@ -278,7 +278,7 @@ spec = do
                     , Right (textResp "Parallel execution complete.")
                     ]
                 opts = defaultAgentOpts{agentMaxRounds = 5}
-            (res, _, hist, _) <- runEff $ runLLMMockFull script (runAgentWith opts [personTool] "Execute parallel tasks")
+            (res, _, hist, _) <- runEff $ runLLMMockFull script (runTextLoopWith opts [personTool] "Execute parallel tasks")
             res `shouldBe` "Parallel execution complete."
 
             let indexedMsgs = zip [0 :: Int ..] hist
@@ -293,7 +293,7 @@ spec = do
                 ((warnIdx, _) : _) -> all (< warnIdx) round2ToolIndices `shouldBe` True
                 [] -> expectationFailure "Expected warning user message"
 
-        it "ensures ToolMsg precedes cycle warning in runAgentStructured multi-round flow" $ do
+        it "ensures ToolMsg precedes cycle warning in runStructuredLoop multi-round flow" $ do
             let callVal = object ["name" .= ("StructuredWorker" :: Text), "age" .= (30 :: Int), "isMember" .= True, "tags" .= ([] :: [Text])]
                 repeatCall = Right (toolResp [ToolCall "sc_1" "person_tool" callVal])
                 finalAnswer = Right (structuredResp (object ["finalScore" .= (100 :: Int), "outcomeSummary" .= ("Completed successfully" :: Text)]))
@@ -303,7 +303,7 @@ spec = do
                     , finalAnswer -- round 3 (final structured output)
                     ]
                 opts = defaultAgentOpts{agentMaxRounds = 5}
-            (res, _, hist, _) <- runEff $ runLLMMockFull script (runAgentStructuredWith @StructuredTarget opts [personTool] "Compute structured target")
+            (res, _, hist, _) <- runEff $ runLLMMockFull script (runStructuredLoopWith @StructuredTarget opts [personTool] "Compute structured target")
             res `shouldBe` StructuredTarget 100 "Completed successfully"
 
             let indexedMsgs = zip [0 :: Int ..] hist

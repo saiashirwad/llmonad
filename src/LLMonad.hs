@@ -39,6 +39,10 @@ module LLMonad (
     structuredResp,
 
     -- * Middleware
+    Middleware (..),
+    cached,
+    traced,
+    rateLimited,
     withCache,
     withCacheModel,
     isCacheableResponse,
@@ -119,14 +123,7 @@ module LLMonad (
     tool',
     toolSync,
     mkTool,
-    liftTool,
     hoistTool,
-    useTools,
-    useToolsWith,
-    runAgent,
-    runAgentWith,
-    runAgentStructured,
-    runAgentStructuredWith,
     AgentOpts (..),
     defaultAgentOpts,
     Agent,
@@ -136,9 +133,15 @@ module LLMonad (
     withAgentOpts,
     bind,
     invoke,
+    runAgent,
+    runTextLoop,
+    runTextLoopWith,
+    runStructuredLoop,
+    runStructuredLoopWith,
     Session,
     start,
     continue,
+    session,
 
     -- * Model Runtimes
     ModelRuntime,
@@ -211,6 +214,7 @@ import LLMonad.Interpreter.Mock
 import LLMonad.Journal
 import LLMonad.Journal.File
 import LLMonad.Journal.Memory
+import LLMonad.Middleware (Middleware (..))
 import LLMonad.Middleware.Cache
 import LLMonad.Middleware.RateLimit
 import LLMonad.Middleware.Trace

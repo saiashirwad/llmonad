@@ -76,14 +76,14 @@ spec = do
                            ]
             length reqs `shouldBe` 2
 
-        it "combines useTools with tracing hooks capturing tool execution events" $ do
+        it "combines runTextLoop with tracing hooks capturing tool execution events" $ do
             tracesRef <- newIORef []
             let fetchTool = mkTool "fetch" "Fetch entity info" $ \(q :: FetchQuery) -> pure ("Data for " <> entityId q)
                 script =
                     [ Right (toolResp [ToolCall "c1" "fetch" (object ["entityId" .= ("E101" :: Text)])])
                     , Right (textResp "Entity data resolved")
                     ]
-                act = withTrace (\t -> modifyIORef' tracesRef (t :)) (useTools [fetchTool] "Get E101")
+                act = withTrace (\t -> modifyIORef' tracesRef (t :)) (runTextLoop [fetchTool] "Get E101")
             (ans, _, _) <- runTier3Script script act
             ans `shouldBe` "Entity data resolved"
             traces <- readIORef tracesRef
@@ -96,7 +96,7 @@ spec = do
                     , Right (toolResp [ToolCall "c1" "fetch" (object ["entityId" .= ("E202" :: Text)])])
                     , Right (textResp "Final answer after transient recovery")
                     ]
-            (ans, _, reqs) <- runTier3Script script (retry 3 (useTools [fetchTool] "Get E202"))
+            (ans, _, reqs) <- runTier3Script script (retry 3 (runTextLoop [fetchTool] "Get E202"))
             ans `shouldBe` "Final answer after transient recovery"
             length reqs `shouldBe` 3
 
@@ -108,7 +108,7 @@ spec = do
                     , Right (toolResp [ToolCall "c2" "transform" (object ["rawData" .= ("RAW-123" :: Text)])])
                     , Right (textResp "Pipeline finished: PROCESSED-RAW-123")
                     ]
-            (ans, hist, _) <- runTier3Script script (useTools [fetchTool, transformTool] "Process 123")
+            (ans, hist, _) <- runTier3Script script (runTextLoop [fetchTool, transformTool] "Process 123")
             ans `shouldBe` "Pipeline finished: PROCESSED-RAW-123"
             hist `shouldSatisfy` any (\case ToolMsg _ "\"RAW-123\"" -> True; _ -> False)
             hist `shouldSatisfy` any (\case ToolMsg _ "\"PROCESSED-RAW-123\"" -> True; _ -> False)

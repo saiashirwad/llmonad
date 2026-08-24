@@ -59,12 +59,12 @@ tools = [stockPriceTool, currencyConversionTool]
 
 workflow :: (LLM :> es, IOE :> es) => Eff es ()
 workflow = do
-    liftIO (putStrLn "--- 1. Multi-Step ReAct Agent (runAgent) ---")
-    answer <- runAgent tools "What is the stock price of AAPL in USD, and what is that amount in EUR?"
+    liftIO (putStrLn "--- 1. Multi-Step ReAct Agent (runTextLoop) ---")
+    answer <- runTextLoop tools "What is the stock price of AAPL in USD, and what is that amount in EUR?"
     liftIO (TIO.putStrLn ("Agent Answer:\n" <> answer))
 
-    liftIO (putStrLn "\n--- 2. Autonomous Agent with Structured Result (runAgentStructured) ---")
-    valuation <- runAgentStructured @PortfolioValuation tools "Get AAPL price in USD and EUR as structured record."
+    liftIO (putStrLn "\n--- 2. Autonomous Agent with Structured Result (runStructuredLoop) ---")
+    valuation <- runStructuredLoop @PortfolioValuation tools "Get AAPL price in USD and EUR as structured record."
     liftIO (putStrLn ("Structured Valuation:\n" <> show valuation))
 
 main :: IO ()

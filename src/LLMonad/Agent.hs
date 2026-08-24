@@ -17,27 +17,25 @@ module LLMonad.Agent (
     withAgentOpts,
     bind,
     invoke,
+    runAgent,
+    runTextLoop,
+    runTextLoopWith,
+    runStructuredLoop,
+    runStructuredLoopWith,
     Session,
     start,
     continue,
-
-    -- * Low-level model-session loop
-    runAgent,
-    runAgentWith,
-    runAgentStructured,
-    runAgentStructuredWith,
-    useTools,
-    useToolsWith,
+    session,
 ) where
 
+import Control.Category (Category (..))
 import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception (throwIO)
-import Control.Monad (when)
+import Control.Monad (when, (<=<))
 import Data.Aeson (FromJSON, encode, object, parseJSON, (.=))
 import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (find, group, sort)
-import Data.Maybe (mapMaybe)
+import Data.List (find)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8With)
@@ -57,8 +55,9 @@ import LLMonad.Error (LLMError (..))
 import LLMonad.Internal.Extract (decodeViaJSON)
 import LLMonad.Model (ModelRuntime, runModelRuntime)
 import LLMonad.Schema (ToSchema (..))
-import LLMonad.Tools (Tool (..), Toolset, hoistTool, toolsetTools)
+import LLMonad.Tools (Tool (..), Toolset, duplicateToolNamesIn, hoistTool, toolsetTools)
 import LLMonad.Types
+import Prelude hiding (id, (.))
 
 -- | Agent loop policy.
 data AgentOpts = AgentOpts
@@ -83,6 +82,9 @@ data AgentDef input output = AgentDef
 
 {- | A configured agent. The constructor is private so each invocation keeps
 its own conversation state.
+
+Agents are callable values: 'runAgent' applies one, 'Category' pipes two, and
+'invoke' is a friendly spelling of 'runAgent'.
 -}
 newtype Agent es input output = Agent
     { runAgentFrom :: [ChatMessage] -> input -> Eff es (output, [ChatMessage])
@@ -111,73 +113,91 @@ structuredAgent systemPrompt render =
 withAgentOpts :: AgentOpts -> AgentDef input output -> AgentDef input output
 withAgentOpts opts definition = definition{definitionOpts = opts}
 
--- | Attach a model and toolset to a model-neutral definition.
+{- | Attach a model and toolset to a model-neutral definition.
+
+The toolset was validated at assembly time ('tools', '(<>)'); this function
+is where the model enters, and the only place that needs a 'ModelRuntime'.
+-}
 bind ::
     (IOE :> es) =>
     ModelRuntime es ->
     Toolset es ->
     AgentDef input output ->
     Agent es input output
-bind runtime toolset definition = Agent $ \history input -> do
-    case duplicateToolNames (toolsetTools toolset) of
-        [] -> pure ()
-        names ->
+bind runtime toolset definition = case duplicateToolNamesIn toolset of
+    [] -> Agent $ \history input ->
+        runModelRuntime runtime $ do
+            setHistory history
+            case definitionSystem definition of
+                Nothing -> clearSystem
+                Just systemPrompt -> setSystem systemPrompt
+
+            let availableTools = map (hoistTool raise) (toolsetTools toolset)
+                prompt = definitionPrompt definition input
+                opts = definitionOpts definition
+
+            result <- case definitionOutput definition of
+                TextOutput -> runTextLoopWith opts availableTools prompt
+                StructuredOutput -> runStructuredLoopWith opts availableTools prompt
+
+            finalHistory <- getHistory
+            pure (result, finalHistory)
+    names ->
+        Agent $ \_history _input ->
             liftIO . throwIO . AgentConfigurationError $
                 "duplicate tool names: " <> T.intercalate ", " names
 
-    runModelRuntime runtime $ do
-        setHistory history
-        case definitionSystem definition of
-            Nothing -> clearSystem
-            Just systemPrompt -> setSystem systemPrompt
+-- | Call an agent. Each call starts a fresh conversation.
+runAgent :: Agent es input output -> input -> Eff es output
+runAgent agent input = fst <$> runAgentFrom agent [] input
 
-        let availableTools = map (hoistTool raise) (toolsetTools toolset)
-            prompt = definitionPrompt definition input
-            opts = definitionOpts definition
-
-        result <- case definitionOutput definition of
-            TextOutput -> runAgentWith opts availableTools prompt
-            StructuredOutput -> runAgentStructuredWith opts availableTools prompt
-
-        finalHistory <- getHistory
-        pure (result, finalHistory)
-
--- | Run an agent with a fresh conversation.
+-- | Run an agent with a fresh conversation. Friendly spelling of 'runAgent'.
 invoke :: Agent es input output -> input -> Eff es output
-invoke agent input = fst <$> runAgentFrom agent [] input
+invoke = runAgent
+
+{- | Return a stateful twin of an agent. The twin has the same type and stays
+callable, but keeps one conversation across calls. Its own calls serialize;
+different sessions run concurrently.
+-}
+
+{- | Return a stateful twin of an agent. The twin has the same type and stays
+callable, but keeps one conversation across calls. Its own calls serialize;
+different sessions run concurrently. The history argument every agent accepts
+is ignored here: the twin owns its history.
+-}
+session :: (IOE :> es) => Agent es input output -> Eff es (Agent es input output)
+session agent = do
+    historyVar <- liftIO (newMVar [])
+    let callable _staleHistory input =
+            withEffToIO (ConcUnlift Ephemeral Unlimited) $ \unlift ->
+                modifyMVar historyVar $ \history -> do
+                    (result, nextHistory) <- unlift (runAgentFrom agent history input)
+                    pure (nextHistory, (result, nextHistory))
+    pure (Agent callable)
 
 {- | Start an explicit persistent conversation. Calls to one session are
 serialized, while different sessions can run concurrently.
 -}
 start :: (IOE :> es) => Agent es input output -> Eff es (Session es input output)
 start agent = do
-    historyVar <- liftIO (newMVar [])
-    pure . Session $ \input ->
-        withEffToIO (ConcUnlift Ephemeral Unlimited) $ \unlift ->
-            modifyMVar historyVar $ \history -> do
-                (result, nextHistory) <- unlift (runAgentFrom agent history input)
-                pure (nextHistory, result)
+    twin <- session agent
+    pure (Session (runAgent twin))
 
 -- | Continue an explicit persistent conversation.
 continue :: Session es input output -> input -> Eff es output
 continue = runSession
 
-duplicateToolNames :: [Tool m] -> [Text]
-duplicateToolNames =
-    mapMaybe duplicateName
-        . group
-        . sort
-        . map (toolSpecName . toolSpec)
-  where
-    duplicateName (name : _ : _) = Just name
-    duplicateName _ = Nothing
+--------------------------------------------------------------------------------
+-- Low-level model-session loops. They operate inside an already-established
+-- 'LLM' scope; the configured-agent machinery above is the friendly surface.
+--------------------------------------------------------------------------------
 
--- | Run the low-level tool loop inside an existing LLM session.
-runAgent :: (LLM :> es, IOE :> es) => [Tool (Eff es)] -> Text -> Eff es Text
-runAgent = runAgentWith defaultAgentOpts
+-- | Text tool loop with default 'AgentOpts'.
+runTextLoop :: (LLM :> es, IOE :> es) => [Tool (Eff es)] -> Text -> Eff es Text
+runTextLoop = runTextLoopWith defaultAgentOpts
 
-runAgentWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
-runAgentWith opts availableTools instruction = withTransaction $ do
+runTextLoopWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
+runTextLoopWith opts availableTools instruction = withTransaction $ do
     pushMessage (UserMsg instruction)
     loop (agentMaxRounds opts) []
   where
@@ -193,27 +213,28 @@ runAgentWith opts availableTools instruction = withTransaction $ do
                     | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
                     | otherwise -> do
                         let currentCalls = [(toolCallName call, toolCallArguments call) | call <- calls]
-                        mapM_ (executeAndRecord specs availableTools) calls
+                        mapM_ (executeAndRecord availableTools) calls
                         when (currentCalls == previousCalls && not (null currentCalls)) $
                             pushMessage (UserMsg repeatedToolWarning)
                         loop (roundsLeft - 1) currentCalls
 
-runAgentStructured ::
+-- | Structured tool loop with default 'AgentOpts'.
+runStructuredLoop ::
     forall output es.
     (LLM :> es, IOE :> es, FromJSON output, ToSchema output) =>
     [Tool (Eff es)] ->
     Text ->
     Eff es output
-runAgentStructured = runAgentStructuredWith defaultAgentOpts
+runStructuredLoop = runStructuredLoopWith defaultAgentOpts
 
-runAgentStructuredWith ::
+runStructuredLoopWith ::
     forall output es.
     (LLM :> es, IOE :> es, FromJSON output, ToSchema output) =>
     AgentOpts ->
     [Tool (Eff es)] ->
     Text ->
     Eff es output
-runAgentStructuredWith opts availableTools instruction = withTransaction $ do
+runStructuredLoopWith opts availableTools instruction = withTransaction $ do
     pushMessage (UserMsg instruction)
     toolLoop (agentMaxRounds opts) []
   where
@@ -231,7 +252,7 @@ runAgentStructuredWith opts availableTools instruction = withTransaction $ do
                     | roundsLeft <= 1 -> exhausted
                     | otherwise -> do
                         let currentCalls = [(toolCallName call, toolCallArguments call) | call <- calls]
-                        mapM_ (executeAndRecord specs availableTools) calls
+                        mapM_ (executeAndRecord availableTools) calls
                         when (currentCalls == previousCalls && not (null currentCalls)) $
                             pushMessage (UserMsg repeatedToolWarning)
                         toolLoop (roundsLeft - 1) currentCalls
@@ -258,20 +279,12 @@ runAgentStructuredWith opts availableTools instruction = withTransaction $ do
 
     exhausted = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
 
--- | Compatibility name for the single agent-loop implementation.
-useTools :: (LLM :> es, IOE :> es) => [Tool (Eff es)] -> Text -> Eff es Text
-useTools = runAgent
-
--- | Compatibility name for the single agent-loop implementation.
-useToolsWith :: (LLM :> es, IOE :> es) => AgentOpts -> [Tool (Eff es)] -> Text -> Eff es Text
-useToolsWith = runAgentWith
-
-executeAndRecord :: (LLM :> es) => [ToolSpec] -> [Tool (Eff es)] -> ToolCall -> Eff es ()
-executeAndRecord specs availableTools call = do
-    let implementation = do
-            _ <- find ((== toolCallName call) . toolSpecName) specs
-            find ((== toolCallName call) . toolSpecName . toolSpec) availableTools
-    result <- case implementation of
+{- | Run one tool call and append its result to the conversation. Errors are
+recorded as feedback for the model rather than aborting the round.
+-}
+executeAndRecord :: (LLM :> es) => [Tool (Eff es)] -> ToolCall -> Eff es ()
+executeAndRecord availableTools call = do
+    result <- case find ((== toolCallName call) . toolSpecName . toolSpec) availableTools of
         Nothing -> pure (Left ("unknown tool: " <> toolCallName call))
         Just selected -> toolRun selected (toolCallArguments call)
     let value = either (object . pure . ("error" .=)) id result
@@ -281,3 +294,33 @@ executeAndRecord specs availableTools call = do
 repeatedToolWarning :: Text
 repeatedToolWarning =
     "Warning: Repeated identical tool call signature detected. Please adjust your plan or return the final answer."
+
+--------------------------------------------------------------------------------
+-- Composition. Agents are functions between Haskell types, so standard
+-- classes give pipelines without bespoke combinators. Instances sequence the
+-- engine face: each stage starts where the previous stage's conversation ended,
+-- which for independent stages behaves exactly like fresh conversations.
+--------------------------------------------------------------------------------
+
+instance Functor (Agent es input) where
+    fmap f (Agent step) = Agent $
+        \history input ->
+            (\(output, history') -> (f output, history')) <$> step history input
+
+instance Applicative (Agent es input) where
+    pure x = Agent (\history _input -> pure (x, history))
+    Agent sf <*> Agent sx = Agent $ \history input -> do
+        (f, afterF) <- sf history input
+        (x, afterX) <- sx afterF input
+        pure (f x, afterX)
+
+instance Monad (Agent es input) where
+    Agent step >>= f = Agent $ \history input -> do
+        (output, history') <- step history input
+        runAgentFrom (f output) history' input
+
+instance Category (Agent es) where
+    id = Agent $ \history input -> pure (input, history)
+    Agent g . Agent f = Agent $ \history input -> do
+        (middle, history') <- f history input
+        g history' middle

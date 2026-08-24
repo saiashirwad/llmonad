@@ -452,7 +452,7 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
                     ]
 
             ((answer, _reqs), finalWorld) <- runEff $ runWorldMemory worldState $ runLLMMock script $ do
-                ans <- runAgent standardCodingTools "Fix subtraction bug in calc.hs"
+                ans <- runTextLoop standardCodingTools "Fix subtraction bug in calc.hs"
                 pure ans
 
             answer `shouldBe` "Fixed subtraction bug in calc.hs"

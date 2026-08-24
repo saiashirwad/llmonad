@@ -28,23 +28,26 @@ module LLMonad.Tools (
     tool',
     toolSync,
     mkTool,
-    liftTool,
     hoistTool,
     Toolset,
     tools,
     noTools,
     toolsetTools,
+    duplicateToolNamesIn,
     (.:?|),
     (.:|),
     ToolResult,
 ) where
 
+import Control.Exception (throw)
 import Data.Aeson (FromJSON, Key, Object, ToJSON (..), Value, parseJSON)
 import Data.Aeson.Types (Parser, parseEither, (.:?))
-import Data.List (intercalate)
+import Data.List (group, intercalate, sort)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
+import LLMonad.Error (LLMError (..))
 import LLMonad.Schema (ToSchema (..))
 import LLMonad.Types (ToolSpec (..))
 
@@ -149,10 +152,6 @@ tool' name desc run =
                 Right parsed' -> run parsed'
         }
 
--- | Lift an IO-based tool into an Effectful environment.
-liftTool :: (IOE :> es) => Tool IO -> Tool (Eff es)
-liftTool (Tool spec run) = Tool spec (\val -> liftIO (run val))
-
 -- | Hoist a natural transformation over a tool's effect monad.
 hoistTool :: (forall x. m x -> n x) -> Tool m -> Tool n
 hoistTool nat (Tool spec run) = Tool spec (nat . run)
@@ -161,14 +160,34 @@ hoistTool nat (Tool spec run) = Tool spec (nat . run)
 newtype Toolset es = Toolset {toolsetTools :: [Tool (Eff es)]}
 
 instance Semigroup (Toolset es) where
-    Toolset left <> Toolset right = Toolset (left <> right)
+    -- Merged sets revalidate: two individually valid toolsets can collide.
+    Toolset left <> Toolset right = tools (left <> right)
 
 instance Monoid (Toolset es) where
     mempty = Toolset []
 
--- | Build a toolset from individual tools.
+{- | Build a toolset, rejecting duplicate tool names immediately so invalid
+assemblies fail before any tokens are spent.
+-}
 tools :: [Tool (Eff es)] -> Toolset es
-tools = Toolset
+tools toolList = case duplicateToolNamesIn (Toolset toolList) of
+    [] -> Toolset toolList
+    names -> throw (AgentConfigurationError ("duplicate tool names: " <> T.intercalate ", " names))
+
+{- | Names that appear more than once in a toolset (empty when it is valid).
+Exposed so callers like 'bind' can surface the failure eagerly instead of
+whenever the tool list happens to be forced.
+-}
+duplicateToolNamesIn :: Toolset es -> [Text]
+duplicateToolNamesIn =
+    mapMaybe headOfDuplicate
+        . group
+        . sort
+        . map (toolSpecName . toolSpec)
+        . toolsetTools
+  where
+    headOfDuplicate (name : _ : _) = Just name
+    headOfDuplicate _ = Nothing
 
 -- | An agent with no tools.
 noTools :: Toolset es

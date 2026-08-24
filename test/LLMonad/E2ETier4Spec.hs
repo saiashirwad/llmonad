@@ -81,7 +81,7 @@ spec = do
                     , Right (textResp "AAPL P/E ratio is 40.0, showing premium valuation.")
                     ]
             (report, hist, _) <-
-                runTier4Script script (useTools [quoteTool, ratioTool] "Analyze AAPL valuation metrics")
+                runTier4Script script (runTextLoop [quoteTool, ratioTool] "Analyze AAPL valuation metrics")
             report `shouldBe` "AAPL P/E ratio is 40.0, showing premium valuation."
             hist `shouldSatisfy` any (\case ToolMsg _ "\"Price: 200.0, EPS: 5.0\"" -> True; _ -> False)
             hist `shouldSatisfy` any (\case ToolMsg _ content -> "40" `T.isInfixOf` content; _ -> False)
@@ -121,7 +121,7 @@ spec = do
                 supportWorkflow = do
                     r1 <- generateText "I cannot log in to my account."
                     r2 <- generateText "The password reset link says token expired."
-                    r3 <- useTools [escalateTool] "User account U-8821 needs escalation for token loop."
+                    r3 <- runTextLoop [escalateTool] "User account U-8821 needs escalation for token loop."
                     pure (r1, r2, r3)
             ((r1, r2, r3), hist, _) <- runTier4Script script supportWorkflow
             r1 `shouldBe` "Hello! I understand you are having login trouble. Have you tried resetting your password?"

@@ -7,11 +7,17 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
--- | Higher-order middleware for client-side rate limiting.
+{- | Higher-order middleware for client-side rate limiting.
+
+Attach to a single agent's runtime with 'rateLimited', or scope over an
+entire effect block with 'withRateLimit'. Both spellings share
+'rateLimitHandler'.
+-}
 module LLMonad.Middleware.RateLimit (
     RateLimiter (..),
     newRateLimiter,
     withRateLimit,
+    rateLimited,
 ) where
 
 import Control.Concurrent (threadDelay)
@@ -20,6 +26,8 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import LLMonad.Core
+import LLMonad.Middleware (Middleware (..))
+import LLMonad.Model (ModelRuntime (..))
 import LLMonad.Types
 
 -- | Rate limiter interface.
@@ -59,19 +67,21 @@ newRateLimiter rate capacity = do
             , rlUpdate = \_ -> pure ()
             }
 
--- | Interpose rate limiting on the LLM effect.
-withRateLimit :: (LLM :> es, IOE :> es) => RateLimiter -> Eff es a -> Eff es a
-withRateLimit limiter = interpose_ $ \case
-    ChatRound p fmt specs choice -> do
-        liftIO (rlAcquire limiter 1)
-        resp <- send (ChatRound p fmt specs choice)
-        liftIO (rlUpdate limiter (crspUsage resp))
-        pure resp
-    StreamRound p fmt specs cb -> do
-        liftIO (rlAcquire limiter 1)
-        resp <- send (StreamRound p fmt specs cb)
-        liftIO (rlUpdate limiter (crspUsage resp))
-        pure resp
+{- | Handler interposing rate limiting on the 'LLM' effect.
+
+Each round acquires one token before reaching the wrapped interpreter; the
+call blocks until the bucket can cover it.
+-}
+
+{- | Handler interposing rate limiting on the 'LLM' effect.
+
+Each round acquires one token before reaching the wrapped interpreter; the
+call blocks until the bucket can cover it.
+-}
+rateLimitHandler :: forall es. (LLM :> es, IOE :> es) => RateLimiter -> EffectHandler_ LLM es
+rateLimitHandler limiter = \case
+    ChatRound p fmt specs choice -> limited (send (ChatRound p fmt specs choice))
+    StreamRound p fmt specs cb -> limited (send (StreamRound p fmt specs cb))
     GetHistory -> send GetHistory
     SetHistory msgs -> send (SetHistory msgs)
     PushMessage msg -> send (PushMessage msg)
@@ -79,3 +89,23 @@ withRateLimit limiter = interpose_ $ \case
     GetSystem -> send GetSystem
     SetSystem sys -> send (SetSystem sys)
     ClearSystem -> send ClearSystem
+  where
+    limited ::
+        (LLM :> es, IOE :> es) =>
+        Eff es CompletionResponse ->
+        Eff es CompletionResponse
+    limited action = do
+        liftIO (rlAcquire limiter 1)
+        resp <- action
+        liftIO (rlUpdate limiter (crspUsage resp))
+        pure resp
+
+-- | Rate limiting as first-class model middleware; attach to individual runtimes.
+rateLimited :: (IOE :> es) => RateLimiter -> Middleware es
+rateLimited limiter = Middleware $ \(ModelRuntime run) ->
+    ModelRuntime $ \action ->
+        run (interpose_ (rateLimitHandler limiter) action)
+
+-- | Interpose rate limiting on the LLM effect.
+withRateLimit :: (LLM :> es, IOE :> es) => RateLimiter -> Eff es a -> Eff es a
+withRateLimit limiter = interpose_ (rateLimitHandler limiter)

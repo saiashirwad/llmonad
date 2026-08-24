@@ -8,7 +8,7 @@
 {- | Batch 3 Challenger Stress Specification: Empirical verification of Batch 3
 Covers:
 1. Anthropic Structured Output & Synthetic Schema Tool Isolation (ANT-011, ANT-012, ANT-017, ANT-018)
-2. runAgentStructuredWith Multi-Turn Tool Workflows & Phase Transitions (CORE-029)
+2. runStructuredLoopWith Multi-Turn Tool Workflows & Phase Transitions (CORE-029)
 3. Transactional History Rollback on Structured Loop Failures (CORE-001, CORE-002, CORE-029)
 -}
 module LLMonad.Batch3ChallengerStressSpec (spec) where
@@ -165,7 +165,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
                         other -> expectationFailure ("Expected tools array of length 2, got: " <> show other)
                 other -> expectationFailure ("Expected Object body, got: " <> show other)
 
-    describe "2. runAgentStructuredWith Multi-Turn Tool Workflows & Phase Transitions" $ do
+    describe "2. runStructuredLoopWith Multi-Turn Tool Workflows & Phase Transitions" $ do
         it "executes multi-turn tool chain before returning structured output" $ do
             auditRef <- newIORef []
             let qTool = queryTool auditRef
@@ -183,7 +183,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, hist, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport defaultAgentOpts [addTool, mulTool, qTool] "Execute multi-step calculation"
+                    $ runStructuredLoopWith @StressReport defaultAgentOpts [addTool, mulTool, qTool] "Execute multi-step calculation"
 
             res `shouldBe` StressReport "REP-FINAL" 60 ["step1", "step2", "step3"]
             length reqs `shouldBe` 4
@@ -218,7 +218,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, hist, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport defaultAgentOpts [addTool, mulTool] "Execute parallel batch"
+                    $ runStructuredLoopWith @StressReport defaultAgentOpts [addTool, mulTool] "Execute parallel batch"
 
             res `shouldBe` StressReport "PARALLEL" 72 ["p1", "p2", "p3", "p4"]
             length reqs `shouldBe` 3
@@ -231,7 +231,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, _, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport defaultAgentOpts [addTool] "Answer directly"
+                    $ runStructuredLoopWith @StressReport defaultAgentOpts [addTool] "Answer directly"
             res `shouldBe` StressReport "IMMEDIATE" 100 ["direct"]
             length reqs `shouldBe` 1
 
@@ -247,7 +247,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, hist, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport defaultAgentOpts [addTool] "Calculate and give structured report"
+                    $ runStructuredLoopWith @StressReport defaultAgentOpts [addTool] "Calculate and give structured report"
 
             res `shouldBe` StressReport "RECOVERED" 10 ["recovered"]
             length reqs `shouldBe` 3
@@ -270,7 +270,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, hist, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport opts [] "No tools needed"
+                    $ runStructuredLoopWith @StressReport opts [] "No tools needed"
 
             res `shouldBe` StressReport "RETRY-OK" 50 []
             length reqs `shouldBe` 2
@@ -280,7 +280,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
         it "throws AgentRoundsExhausted when agentMaxRounds is exceeded in tool phase" $ do
             let infiniteTools = repeat (Right (toolResp [ToolCall "loop" "add" (object ["valA" .= (1 :: Int), "valB" .= (1 :: Int)])]))
                 opts = defaultAgentOpts{agentMaxRounds = 3}
-            res <- try (runEff $ runLLMMockFull (take 10 infiniteTools) (runAgentStructuredWith @StressReport opts [addTool] "Infinite loop"))
+            res <- try (runEff $ runLLMMockFull (take 10 infiniteTools) (runStructuredLoopWith @StressReport opts [addTool] "Infinite loop"))
             case res of
                 Left (AgentRoundsExhausted 3) -> pure ()
                 Left other -> expectationFailure ("Expected AgentRoundsExhausted 3, got: " <> show other)
@@ -293,7 +293,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
                 testProg = do
                     pushMessage (UserMsg "Prior message 1")
                     pushMessage (AssistantMsg "Prior response 1" [])
-                    _ <- attempt (runAgentStructuredWith @StressReport opts [addTool] "Failing structured agent")
+                    _ <- attempt (runStructuredLoopWith @StressReport opts [addTool] "Failing structured agent")
                     getHistory
 
             (hist, reqs, _, _) <- runEff $ runLLMMockFull script testProg
@@ -314,7 +314,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
                 testProg = do
                     pushMessage (UserMsg "Initial committed task")
                     pushMessage (AssistantMsg "Initial committed reply" [])
-                    _ <- attempt (runAgentStructuredWith @StressReport opts [addTool] "Run agent that exhausts rounds")
+                    _ <- attempt (runStructuredLoopWith @StressReport opts [addTool] "Run agent that exhausts rounds")
                     getHistory
 
             (hist, reqs, _, _) <- runEff $ runLLMMockFull script testProg
@@ -332,7 +332,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
                 testProg = do
                     pushMessage (UserMsg "Safe prompt")
                     pushMessage (AssistantMsg "Safe answer" [])
-                    _ <- EE.try @SomeException (runAgentStructuredWith @StressReport opts [failingTool] "Run exploding tool")
+                    _ <- EE.try @SomeException (runStructuredLoopWith @StressReport opts [failingTool] "Run exploding tool")
                     getHistory
 
             (hist, _, _, _) <- runEff $ runLLMMockFull script testProg
@@ -355,9 +355,9 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
                     ]
                 opts = defaultAgentOpts{agentMaxRounds = 3}
                 pipeline = do
-                    r1 <- runAgentStructuredWith @StressReport opts [addTool] "First task"
-                    _ <- attempt (runAgentStructuredWith @StressReport opts [addTool] "Second failing task")
-                    r2 <- runAgentStructuredWith @StressReport opts [addTool] "Third task"
+                    r1 <- runStructuredLoopWith @StressReport opts [addTool] "First task"
+                    _ <- attempt (runStructuredLoopWith @StressReport opts [addTool] "Second failing task")
+                    r2 <- runStructuredLoopWith @StressReport opts [addTool] "Third task"
                     pure (r1, r2)
 
             ((r1, r2), reqs, hist, _) <- runEff $ runLLMMockFull script pipeline
@@ -375,7 +375,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
                     setSystem "You are a critical system tester."
                     pushMessage (UserMsg "Prior user query")
                     pushMessage (AssistantMsg "Prior assistant reply" [])
-                    _ <- attempt (runAgentStructuredWith @StressReport opts [addTool] "Should fail and rollback")
+                    _ <- attempt (runStructuredLoopWith @StressReport opts [addTool] "Should fail and rollback")
                     (,,) <$> getSystem <*> getHistory <*> pure ()
 
             ((sys, hist, ()), _, _, _) <- runEff $ runLLMMockFull script testProg
@@ -400,7 +400,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, hist, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport opts [addTool] "Calculate with error recovery"
+                    $ runStructuredLoopWith @StressReport opts [addTool] "Calculate with error recovery"
 
             res `shouldBe` StressReport "RECOVERED-TOOL" 50 ["healed"]
             length reqs `shouldBe` 3
@@ -424,7 +424,7 @@ spec = describe "Batch 3 Challenger Stress Suite" $ do
             (res, reqs, hist, _) <-
                 runEff
                     $ runLLMMockFull script
-                    $ runAgentStructuredWith @StressReport opts [addTool, mulTool] "Run 5 steps"
+                    $ runStructuredLoopWith @StressReport opts [addTool, mulTool] "Run 5 steps"
 
             res `shouldBe` StressReport "5-STEP" 60 ["deep", "chain"]
             length reqs `shouldBe` 6
