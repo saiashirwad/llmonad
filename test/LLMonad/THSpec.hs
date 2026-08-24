@@ -12,7 +12,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import GHC.Generics (Generic)
 import LLMonad
-import LLMonad.TH.QuasiQuoter (PromptChunk (..), parsePromptChunks)
+import LLMonad.TH.QuasiQuoter (PromptChunk (..), dedentTemplate, parsePromptChunks)
 import Test.Hspec
 
 data PersonQuery = PersonQuery
@@ -88,6 +88,27 @@ spec = do
                 -- ordinary text, the second escapes the opener.
                 parsePromptChunks "\\\\#{x}" `shouldBe` Right [ChunkLit "\\#{x}"]
                 parsePromptChunks "a\\\\#{b}c" `shouldBe` Right [ChunkLit "a\\#{b}c"]
+
+            it "strips the indentation of a multi-line body" $ do
+                let path = "Main.hs" :: Text
+                    p =
+                        [prompt|
+                            Review #{path}.
+
+                            Quote the offending line.
+                        |]
+                p `shouldBe` "Review Main.hs.\n\nQuote the offending line."
+
+            it "leaves single-line and flush-left bodies alone" $ do
+                dedentTemplate "Hello world!" `shouldBe` "Hello world!"
+                dedentTemplate "One\nTwo" `shouldBe` "One\nTwo"
+
+            it "dedents to the shallowest non-blank line" $ do
+                dedentTemplate "\n    One\n      Two\n" `shouldBe` "One\n  Two"
+                dedentTemplate "\n  One\n\n  Two\n  " `shouldBe` "One\n\nTwo"
+
+            it "keeps a deliberate trailing newline" $ do
+                dedentTemplate "\n  One\n\n  " `shouldBe` "One\n"
 
             it "merges neighbouring literals into single runs" $ do
                 parsePromptChunks "\\#{a}\\#{b} #{v} \\#{c}"

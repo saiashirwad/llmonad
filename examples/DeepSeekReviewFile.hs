@@ -33,17 +33,25 @@ severities = "blocker, warning, nit, clean"
 
 systemPrompt :: T.Text
 systemPrompt =
-    [prompt|You are a terse Haskell reviewer.
-Report the single worst problem in the file and nothing else.
-Rate it as one of: #{severities}.|]
+    [prompt|
+        You are a terse Haskell reviewer.
+        Report the single worst problem in the file and nothing else.
+        Rate it as one of: #{severities}.
+    |]
 
 renderRequest :: ReviewRequest -> T.Text
-renderRequest ReviewRequest{requestPath, requestLineCount, requestSource} =
-    [prompt|Review #{requestPath} (#{requestLineCount} lines).
+renderRequest request =
+    [prompt|
+        Review #{path} (#{lineCount} lines).
 
-#{requestSource}
+        #{source}
 
-Quote the offending line in the summary.|]
+        Quote the offending line in the summary.
+    |]
+  where
+    path = requestPath request
+    lineCount = requestLineCount request
+    source = requestSource request
 
 definition :: AgentDef ReviewRequest Verdict
 definition = structuredAgent systemPrompt renderRequest
@@ -72,6 +80,8 @@ main = do
                 definition
     Verdict{severity, summary, suggestion} <- runEff (workflow reviewer request)
     TIO.putStrLn
-        [prompt|#{severity}: #{summary}
+        [prompt|
+            #{severity}: #{summary}
 
-Suggested fix: #{suggestion}|]
+            Suggested fix: #{suggestion}
+        |]
