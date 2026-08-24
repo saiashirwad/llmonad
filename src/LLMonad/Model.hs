@@ -4,13 +4,13 @@
 {-# LANGUAGE TypeOperators #-}
 
 -- | Configured model adapters for first-class agents.
-module LLMonad.Model
-  ( ModelRuntime
-  , model
-  , modelWithConfig
-  , mockModel
-  , runModelRuntime
-  ) where
+module LLMonad.Model (
+    ModelRuntime,
+    model,
+    modelWithConfig,
+    mockModel,
+    runModelRuntime,
+) where
 
 import Effectful (Eff, IOE, (:>))
 import LLMonad.Core (LLM)
@@ -22,8 +22,8 @@ import LLMonad.Types (CompletionResponse, Model)
 
 -- | A model and its adapter. Each run creates a fresh model session.
 newtype ModelRuntime es = ModelRuntime
-  { runModelRuntime :: forall a. Eff (LLM : es) a -> Eff es a
-  }
+    { runModelRuntime :: forall a. Eff (LLM : es) a -> Eff es a
+    }
 
 -- | Configure a provider and model name with default request parameters.
 model :: (IOE :> es) => Provider -> Model -> ModelRuntime es
@@ -33,7 +33,8 @@ model provider modelName = modelWithConfig (defaultConfig provider modelName)
 modelWithConfig :: (IOE :> es) => LLMConfig -> ModelRuntime es
 modelWithConfig config = ModelRuntime (runLLMHTTP config)
 
--- | Configure a deterministic model script. The script restarts for each
--- invocation, which keeps independent agent calls deterministic.
+{- | Configure a deterministic model script. The script restarts for each
+invocation, which keeps independent agent calls deterministic.
+-}
 mockModel :: [Either LLMError CompletionResponse] -> ModelRuntime es
 mockModel script = ModelRuntime (fmap fst . runLLMMock script)

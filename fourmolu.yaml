@@ -1,0 +1,4 @@
+# Keep the project style independent of the user's Fourmolu configuration.
+indentation: 4
+column-limit: none
+respectful: true

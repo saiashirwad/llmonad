@@ -6,74 +6,74 @@
 {-# LANGUAGE TypeOperators #-}
 
 -- | Core dynamic effect for filesystem, directory traversal, search, and process execution.
-module LLMonad.World
-  ( -- * The World Effect
-    World (..)
+module LLMonad.World (
+    -- * The World Effect
+    World (..),
 
     -- * Core Smart Constructors
-  , readFileText
-  , readFileSlice
-  , writeFileText
-  , deleteFile
-  , createDirectory
-  , listDirectory
-  , searchFiles
-  , findFiles
-  , doesPathExist
-  , doesFileExist
-  , doesDirectoryExist
-  , getWorkspaceRoot
-  , runCommand
-  , execShell
+    readFileText,
+    readFileSlice,
+    writeFileText,
+    deleteFile,
+    createDirectory,
+    listDirectory,
+    searchFiles,
+    findFiles,
+    doesPathExist,
+    doesFileExist,
+    doesDirectoryExist,
+    getWorkspaceRoot,
+    runCommand,
+    execShell,
 
     -- * Simplified World Aliases
-  , readFileWorld
-  , writeFileWorld
-  , deleteFileWorld
-  , listDirWorld
-  , findFilesWorld
-  , grepFilesWorld
-  , runCommandWorld
-  , getCurrentDirWorld
+    readFileWorld,
+    writeFileWorld,
+    deleteFileWorld,
+    listDirWorld,
+    findFilesWorld,
+    grepFilesWorld,
+    runCommandWorld,
+    getCurrentDirWorld,
 
     -- * Re-exported Types
-  , module LLMonad.World.Types
-  ) where
+    module LLMonad.World.Types,
+) where
 
 import Data.Text (Text)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Dynamic
 import LLMonad.World.Types
 
 -- | Dynamic effect capturing filesystem, search, and process operations.
 data World :: Effect where
-  -- | Read entire UTF-8 text file.
-  ReadFileText       :: FilePath -> World m Text
-  -- | Read a 1-indexed line slice [startLine, endLine] of a file.
-  ReadFileSlice      :: FilePath -> Maybe Int -> Maybe Int -> World m Text
-  -- | Write or overwrite UTF-8 text file, creating parent directories.
-  WriteFileText      :: FilePath -> Text -> World m ()
-  -- | Delete an existing file.
-  DeleteFile         :: FilePath -> World m ()
-  -- | Create directory path (optionally creating parents).
-  CreateDirectory    :: FilePath -> Bool -> World m ()
-  -- | List direct children of a directory with metadata.
-  ListDirectory      :: FilePath -> World m [DirEntry]
-  -- | Search file contents with pattern matching.
-  SearchFiles        :: SearchOptions -> World m [SearchMatch]
-  -- | Find file paths by name pattern or depth.
-  FindFiles          :: FindOptions -> World m [FilePath]
-  -- | Check if any path (file or directory) exists.
-  DoesPathExist      :: FilePath -> World m Bool
-  -- | Check if path is a file.
-  DoesFileExist      :: FilePath -> World m Bool
-  -- | Check if path is a directory.
-  DoesDirectoryExist :: FilePath -> World m Bool
-  -- | Retrieve canonical workspace root directory.
-  GetWorkspaceRoot   :: World m FilePath
-  -- | Execute command process with arguments and options.
-  RunCommand         :: CommandSpec -> World m ProcessResult
+    -- | Read entire UTF-8 text file.
+    ReadFileText :: FilePath -> World m Text
+    -- | Read a 1-indexed line slice [startLine, endLine] of a file.
+    ReadFileSlice :: FilePath -> Maybe Int -> Maybe Int -> World m Text
+    -- | Write or overwrite UTF-8 text file, creating parent directories.
+    WriteFileText :: FilePath -> Text -> World m ()
+    -- | Delete an existing file.
+    DeleteFile :: FilePath -> World m ()
+    -- | Create directory path (optionally creating parents).
+    CreateDirectory :: FilePath -> Bool -> World m ()
+    -- | List direct children of a directory with metadata.
+    ListDirectory :: FilePath -> World m [DirEntry]
+    -- | Search file contents with pattern matching.
+    SearchFiles :: SearchOptions -> World m [SearchMatch]
+    -- | Find file paths by name pattern or depth.
+    FindFiles :: FindOptions -> World m [FilePath]
+    -- | Check if any path (file or directory) exists.
+    DoesPathExist :: FilePath -> World m Bool
+    -- | Check if path is a file.
+    DoesFileExist :: FilePath -> World m Bool
+    -- | Check if path is a directory.
+    DoesDirectoryExist :: FilePath -> World m Bool
+    -- | Retrieve canonical workspace root directory.
+    GetWorkspaceRoot :: World m FilePath
+    -- | Execute command process with arguments and options.
+    RunCommand :: CommandSpec -> World m ProcessResult
 
 type instance DispatchOf World = Dynamic
 
@@ -148,24 +148,24 @@ deleteFileWorld = deleteFile
 -- | Alias: List directory filenames.
 listDirWorld :: (World :> es) => FilePath -> Eff es [FilePath]
 listDirWorld fp = do
-  entries <- listDirectory fp
-  pure (map deName entries)
+    entries <- listDirectory fp
+    pure (map deName entries)
 
 -- | Alias: Find files matching pattern.
 findFilesWorld :: (World :> es) => FilePath -> Text -> Eff es [FilePath]
 findFilesWorld dir pat =
-  findFiles (FindOptions dir (if T.null pat then Nothing else Just pat) Nothing FindAny [])
+    findFiles (FindOptions dir (if T.null pat then Nothing else Just pat) Nothing FindAny [])
 
 -- | Alias: Grep files matching pattern.
 grepFilesWorld :: (World :> es) => FilePath -> Text -> Eff es [(FilePath, Int, Text)]
 grepFilesWorld dir query = do
-  matches <- searchFiles (SearchOptions query dir False False Nothing [] [])
-  pure [(smFile m, smLineNumber m, smLineContent m) | m <- matches]
+    matches <- searchFiles (SearchOptions query dir False False Nothing [] [])
+    pure [(smFile m, smLineNumber m, smLineContent m) | m <- matches]
 
 -- | Alias: Run command with program, args, cwd, and timeout.
 runCommandWorld :: (World :> es) => Text -> [Text] -> Maybe FilePath -> Maybe Int -> Eff es ProcessResult
 runCommandWorld prog args mcwd mtimeout =
-  runCommand (CommandSpec prog args mcwd Nothing mtimeout Nothing)
+    runCommand (CommandSpec prog args mcwd Nothing mtimeout Nothing)
 
 -- | Alias: Get current working/workspace directory.
 getCurrentDirWorld :: (World :> es) => Eff es FilePath

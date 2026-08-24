@@ -8,200 +8,200 @@
 {-# LANGUAGE TypeOperators #-}
 
 -- | Top-level LLMonad interface.
-module LLMonad
-  ( -- * Core Effect & Operations
-    LLM (..)
-  , chatRound
-  , streamRound
-  , getHistory
-  , setHistory
-  , pushMessage
-  , clearHistory
-  , getSystem
-  , setSystem
-  , clearSystem
+module LLMonad (
+    -- * Core Effect & Operations
+    LLM (..),
+    chatRound,
+    streamRound,
+    getHistory,
+    setHistory,
+    pushMessage,
+    clearHistory,
+    getSystem,
+    setSystem,
+    clearSystem,
 
     -- * Text Generation Helpers
-  , generateText
-  , generateTextWith
-  , streamText
-  , streamTextWith
+    generateText,
+    generateTextWith,
+    streamText,
+    streamTextWith,
 
     -- * Interpreters
-  , LLMConfig (..)
-  , defaultConfig
-  , runLLMHTTP
-  , runLLMHTTPWithState
-  , runLLMMock
-  , runLLMMockFull
-  , textResp
-  , toolResp
-  , structuredResp
+    LLMConfig (..),
+    defaultConfig,
+    runLLMHTTP,
+    runLLMHTTPWithState,
+    runLLMMock,
+    runLLMMockFull,
+    textResp,
+    toolResp,
+    structuredResp,
 
     -- * Middleware
-  , withCache
-  , withCacheModel
-  , isCacheableResponse
-  , CacheStore (..)
-  , newInMemoryCache
-  , withTrace
-  , Trace (..)
-  , withRateLimit
-  , RateLimiter (..)
-  , newRateLimiter
+    withCache,
+    withCacheModel,
+    isCacheableResponse,
+    CacheStore (..),
+    newInMemoryCache,
+    withTrace,
+    Trace (..),
+    withRateLimit,
+    RateLimiter (..),
+    newRateLimiter,
 
     -- * Providers
-  , Provider (..)
-  , StructuredMode (..)
-  , nonStreamingFallback
-  , module LLMonad.Providers.OpenAICompatible
-  , module LLMonad.Providers.Anthropic
+    Provider (..),
+    StructuredMode (..),
+    nonStreamingFallback,
+    module LLMonad.Providers.OpenAICompatible,
+    module LLMonad.Providers.Anthropic,
 
     -- * Types
-  , Model (..)
-  , Role (..)
-  , ToolCall (..)
-  , ChatMessage (..)
-  , Params (..)
-  , defaultParams
-  , overrideParams
-  , ResponseFormat (..)
-  , ToolSpec (..)
-  , ToolChoice (..)
-  , CompletionRequest (..)
-  , CompletionResponse (..)
-  , FinishReason (..)
-  , Usage (..)
-  , StreamEvent (..)
+    Model (..),
+    Role (..),
+    ToolCall (..),
+    ChatMessage (..),
+    Params (..),
+    defaultParams,
+    overrideParams,
+    ResponseFormat (..),
+    ToolSpec (..),
+    ToolChoice (..),
+    CompletionRequest (..),
+    CompletionResponse (..),
+    FinishReason (..),
+    Usage (..),
+    StreamEvent (..),
 
     -- * Error Handling & Recovery
-  , LLMError (..)
-  , isTransient
-  , prettyError
-  , attempt
-  , retry
-  , withTransaction
+    LLMError (..),
+    isTransient,
+    prettyError,
+    attempt,
+    retry,
+    withTransaction,
 
     -- * Prompt Helpers & Message Algebra
-  , embed
-  , embedShow
-  , Prompt (..)
-  , fewShot
-  , user
-  , assistant
-  , system
-  , toolResult
-  , ToPromptArg (..)
+    embed,
+    embedShow,
+    Prompt (..),
+    fewShot,
+    user,
+    assistant,
+    system,
+    toolResult,
+    ToPromptArg (..),
 
     -- * Streaming
-  , streamSSE
+    streamSSE,
 
     -- * Schema & Structured Output
-  , ToSchema (..)
-  , HasSchema
-  , schema
-  , schemaName
-  , askStructured
-  , extractWithRetry
+    ToSchema (..),
+    HasSchema,
+    schema,
+    schemaName,
+    askStructured,
+    extractWithRetry,
 
     -- * Curried Functional API
-  , AskFunction (..)
-  , ask
-  , ask'
+    AskFunction (..),
+    ask,
+    ask',
 
     -- * Tools & Agent
-  , Tool (..)
-  , ToolIO
-  , Toolset
-  , tools
-  , noTools
-  , tool
-  , tool'
-  , toolSync
-  , mkTool
-  , liftTool
-  , hoistTool
-  , useTools
-  , useToolsWith
-  , runAgent
-  , runAgentWith
-  , runAgentStructured
-  , runAgentStructuredWith
-  , AgentOpts (..)
-  , defaultAgentOpts
-  , Agent
-  , AgentDef
-  , textAgent
-  , structuredAgent
-  , withAgentOpts
-  , bind
-  , invoke
-  , Session
-  , start
-  , continue
+    Tool (..),
+    ToolIO,
+    Toolset,
+    tools,
+    noTools,
+    tool,
+    tool',
+    toolSync,
+    mkTool,
+    liftTool,
+    hoistTool,
+    useTools,
+    useToolsWith,
+    runAgent,
+    runAgentWith,
+    runAgentStructured,
+    runAgentStructuredWith,
+    AgentOpts (..),
+    defaultAgentOpts,
+    Agent,
+    AgentDef,
+    textAgent,
+    structuredAgent,
+    withAgentOpts,
+    bind,
+    invoke,
+    Session,
+    start,
+    continue,
 
     -- * Model Runtimes
-  , ModelRuntime
-  , model
-  , modelWithConfig
-  , mockModel
+    ModelRuntime,
+    model,
+    modelWithConfig,
+    mockModel,
 
     -- * Workflow Concurrency
-  , concurrently
-  , race
-  , mapConcurrentlyN
-  , WorkflowError (..)
+    concurrently,
+    race,
+    mapConcurrentlyN,
+    WorkflowError (..),
 
     -- * Standard Coding Tools
-  , module LLMonad.Tools.Coding
+    module LLMonad.Tools.Coding,
 
     -- * Template Haskell
-  , prompt
-  , makeTool
-  , makeToolNamed
+    prompt,
+    makeTool,
+    makeToolNamed,
 
     -- * Execution Sandboxing & World Effect
-  , module LLMonad.World
-  , module LLMonad.World.Local
-  , module LLMonad.World.Worktree
-  , module LLMonad.World.Memory
+    module LLMonad.World,
+    module LLMonad.World.Local,
+    module LLMonad.World.Worktree,
+    module LLMonad.World.Memory,
 
     -- * Session Persistence & Journal Effect
-  , Journal (..)
-  , JournalEvent (TurnStarted, ModelTurn, ToolInvoked, ToolCompleted, MetricsReported, TurnFinished)
-  , pattern JournalUserMsg
-  , pattern ModelTurnSimple
-  , pattern ToolInvokedSimple
-  , ModelMetrics (..)
-  , ReplaySummary (..)
-  , JournalState (..)
-  , recordEvent
-  , getEvents
-  , clearEvents
-  , recordUserMsg
-  , recordModelTurn
-  , recordModelTurnWithCalls
-  , recordToolCall
-  , recordToolCallWithId
-  , recordToolResult
-  , recordMetrics
-  , recordTurnStart
-  , recordTurnFinish
-  , runJournalFile
-  , runJournalFileWithEvents
-  , runJournalFileWorld
-  , runJournalMemory
-  , runJournalMemoryWithState
-  , runJournalMemorySimple
-  , resumeSession
-  , resumeSessionWorld
-  , replayAudit
-  , replayAuditSummary
-  , loadJournalFile
-  , loadJournalFileWorld
-  , loadJournalText
-  , reconstructChatHistory
-  ) where
+    Journal (..),
+    JournalEvent (TurnStarted, ModelTurn, ToolInvoked, ToolCompleted, MetricsReported, TurnFinished),
+    pattern JournalUserMsg,
+    pattern ModelTurnSimple,
+    pattern ToolInvokedSimple,
+    ModelMetrics (..),
+    ReplaySummary (..),
+    JournalState (..),
+    recordEvent,
+    getEvents,
+    clearEvents,
+    recordUserMsg,
+    recordModelTurn,
+    recordModelTurnWithCalls,
+    recordToolCall,
+    recordToolCallWithId,
+    recordToolResult,
+    recordMetrics,
+    recordTurnStart,
+    recordTurnFinish,
+    runJournalFile,
+    runJournalFileWithEvents,
+    runJournalFileWorld,
+    runJournalMemory,
+    runJournalMemoryWithState,
+    runJournalMemorySimple,
+    resumeSession,
+    resumeSessionWorld,
+    replayAudit,
+    replayAuditSummary,
+    loadJournalFile,
+    loadJournalFileWorld,
+    loadJournalText,
+    reconstructChatHistory,
+) where
 
 import LLMonad.API
 import LLMonad.Agent
@@ -226,9 +226,8 @@ import LLMonad.TH
 import LLMonad.Tools
 import LLMonad.Tools.Coding
 import LLMonad.Types
+import LLMonad.Workflow
 import LLMonad.World
 import LLMonad.World.Local
 import LLMonad.World.Memory
 import LLMonad.World.Worktree
-import LLMonad.Workflow
-

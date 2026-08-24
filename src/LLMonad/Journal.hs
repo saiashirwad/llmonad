@@ -7,37 +7,37 @@
 {-# LANGUAGE TypeOperators #-}
 
 -- | Core dynamic effect for session event sourcing, audit logging, and replay.
-module LLMonad.Journal
-  ( -- * The Journal Effect
-    Journal (..)
+module LLMonad.Journal (
+    -- * The Journal Effect
+    Journal (..),
 
     -- * Core Smart Constructors
-  , recordEvent
-  , getEvents
-  , clearEvents
-  , recordUserMsg
-  , recordModelTurn
-  , recordModelTurnWithCalls
-  , recordToolCall
-  , recordToolCallWithId
-  , recordToolResult
-  , recordMetrics
-  , recordTurnStart
-  , recordTurnFinish
+    recordEvent,
+    getEvents,
+    clearEvents,
+    recordUserMsg,
+    recordModelTurn,
+    recordModelTurnWithCalls,
+    recordToolCall,
+    recordToolCallWithId,
+    recordToolResult,
+    recordMetrics,
+    recordTurnStart,
+    recordTurnFinish,
 
     -- * Session Management & Replay Analytics
-  , resumeSession
-  , resumeSessionWorld
-  , replayAudit
-  , replayAuditSummary
-  , loadJournalFile
-  , loadJournalFileWorld
-  , loadJournalText
-  , reconstructChatHistory
+    resumeSession,
+    resumeSessionWorld,
+    replayAudit,
+    replayAuditSummary,
+    loadJournalFile,
+    loadJournalFileWorld,
+    loadJournalText,
+    reconstructChatHistory,
 
     -- * Re-exported Types
-  , module LLMonad.Journal.Types
-  ) where
+    module LLMonad.Journal.Types,
+) where
 
 import Data.Aeson (Value)
 import Data.Text (Text)
@@ -48,9 +48,9 @@ import LLMonad.Journal.Types
 
 -- | Dynamic effect for capturing session events, metrics, and tool calls.
 data Journal :: Effect where
-  RecordEvent :: JournalEvent -> Journal m ()
-  GetEvents   :: Journal m [JournalEvent]
-  ClearEvents :: Journal m ()
+    RecordEvent :: JournalEvent -> Journal m ()
+    GetEvents :: Journal m [JournalEvent]
+    ClearEvents :: Journal m ()
 
 type instance DispatchOf Journal = Dynamic
 

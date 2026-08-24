@@ -75,7 +75,24 @@ cabal run deepseek-ask-project -- "Where is the World effect interpreted?"
 
 ## Development
 
+Install GHC, Cabal, and HLS with
+[GHCup](https://www.haskell.org/ghcup/). Install
+[DotSlash](https://dotslash-cli.com/docs/installation/) once as the runner for
+project-pinned developer tools. Then fetch and verify the prebuilt tools:
+
 ```bash
-cabal build all --ghc-options="-Wall -Werror"
-cabal test
+make tools
+```
+
+The repository pins the Fourmolu version in `tools/fourmolu`. DotSlash keeps the
+downloaded binary in its user cache and does not add Fourmolu to the user
+`PATH`.
+
+```bash
+make build          # Build all components
+make test           # Run all tests
+make repl           # Start GHCi for the library
+make format         # Format Haskell source files
+make format-check   # Check the format without changes
+make check          # Check the format, build, and test
 ```
