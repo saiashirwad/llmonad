@@ -3,9 +3,9 @@
 LLMonad is an Effectful library for typed agents, tools, and workflows:
 agents call tools, and workflows compose agents.
 
-Each tool declares the effects it needs in its own type. Those requirements
-travel with it to the program edge, where an interpreter discharges them,
-once.
+A tool that reads files carries `World :> es` in its type. That constraint
+follows the tool into toolsets and agents, and one interpreter at the program
+edge discharges it for the whole run.
 
 - `runWorldLocal "./workspace"` resolves every path a tool touches inside
   that root and fails on anything else. Other interpreters serve files from
@@ -14,6 +14,18 @@ once.
   runs in tests, with no network and no disk.
 - Workflow code never names a provider, a model, or an HTTP detail. Agents
   are values; workflows are functions taking them.
+
+How to read the signatures:
+
+- `Eff es` is a computation whose allowed effects are listed in `es`, and
+  `World :> es` reads as "World is available in es".
+- The effect system comes from
+  [Effectful](https://github.com/haskell-effectful/effectful); `IOE` is its
+  effect for raw `IO`.
+- `World` and `Journal` are effects LLMonad defines on top of it.
+- The program edge is wherever your code calls a `run...` interpreter such as
+  `runEff` or `runWorldLocal`: above that line, effects exist only in types;
+  below it, they become real work.
 
 ## Define the agents
 
@@ -54,6 +66,10 @@ workflow researcher reviewer = do
   invoke reviewer (overview <> "\n\n" <> tests)
 ```
 
+An `AgentDef` is one agent's specification: its system prompt, how inputs
+become prompt text, and whether it answers with plain text or structured
+data. It names no model; `mount` in a later section attaches one.
+
 `invoke` starts with an empty conversation. The two `invoke` calls above run
 concurrently and share nothing.
 
@@ -71,10 +87,11 @@ researchTools =
 ```
 
 Tool handlers run in `Eff`, so the effects a tool needs stay in the type of the
-toolset. `viewFileTool` reads files through the `World` effect, which is why
-`researchTools` carries `World :> es`. That constraint follows the agent
-around until the program interprets `World` at the edge, which is also why the
-reviewer below never touches the disk.
+toolset. `viewFileTool` reads files through `World`, LLMonad's effect for the
+machine itself: reading and writing files, listing directories, and running
+commands. That is why `researchTools` carries `World :> es`. The constraint
+follows the agent around until the program interprets `World` at the edge,
+which is also why the reviewer below never touches the disk.
 
 Write your own tool by wrapping a function whose argument type derives
 `FromJSON` and `ToSchema`. The derived schema is what the model sees; the
@@ -123,6 +140,11 @@ main = do
   report <- runEff . runWorldLocal "." $ workflow researcher reviewer
   TIO.putStrLn report
 ```
+
+`model` returns a `ModelRuntime`: one configured model, its provider, name,
+and default parameters, as an ordinary value. Mount the same runtime on
+several agents, wrap it in middleware (below), or swap it for `mockModel` in
+tests.
 
 What each part does:
 
@@ -211,7 +233,8 @@ verdictDef :: AgentDef Text Verdict
 verdictDef = structuredAgent "Report the single worst problem in the file." id
 ```
 
-An agent gives up after eight model rounds. Raise the ceiling per definition:
+A round is one model reply plus the tool calls that reply requested. An
+agent gives up after eight; raise the ceiling per definition:
 
 ```haskell
 patientResearcher :: AgentDef Text Text
@@ -243,7 +266,7 @@ cabal run deepseek-hello
 cabal run deepseek-read-readme
 cabal run deepseek-ask-project -- "Where is the World effect interpreted?"
 cabal run deepseek-review-file -- src/LLMonad/Agent.hs
-cabal run quasiquotes-example
+cabal run quasiquotes-example   # prompt and makeTool Template Haskell helpers
 ```
 
 ## Development
