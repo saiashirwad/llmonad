@@ -34,9 +34,7 @@ stripFences t0 =
                     then
                         let afterFirstLine = T.drop 1 (T.dropWhile (/= '\n') rest)
                             trimmed = T.strip afterFirstLine
-                         in case T.stripSuffix "```" trimmed of
-                                Just inner -> T.strip inner
-                                Nothing -> trimmed
+                         in maybe trimmed T.strip (T.stripSuffix "```" trimmed)
                     else
                         let inner = case T.stripSuffix "```" (T.strip rest) of
                                 Just s -> T.strip s
@@ -44,12 +42,7 @@ stripFences t0 =
                             (tag, val) = T.span isAlphaNum inner
                             lowerTag = T.toLower tag
                             isTag = lowerTag `elem` ["json", "json5", "javascript", "js", "yaml", "yml", "text", "txt"]
-                         in if isTag
-                                then T.strip val
-                                else
-                                    if not (T.null tag) && not (T.null val) && (T.head (T.strip val) `elem` ['{', '[', '"'])
-                                        then T.strip val
-                                        else inner
+                         in (if isTag || (not (T.null tag) && not (T.null val) && (T.head (T.strip val) `elem` ['{', '[', '"'])) then T.strip val else inner)
 
 {- | Parse the first valid JSON value found in the text.
 
@@ -110,7 +103,7 @@ extractFencedBlocks t = go (T.lines t) [] []
 
 -- | Check if the text contains structural JSON delimiters '{', '}', '[', ']'.
 hasStructuralDelimiters :: Text -> Bool
-hasStructuralDelimiters t = T.any (\c -> c == '{' || c == '}' || c == '[' || c == ']') t
+hasStructuralDelimiters = T.any (\c -> c == '{' || c == '}' || c == '[' || c == ']')
 
 -- | Extract a JSON value and immediately decode it into a Haskell type.
 decodeViaJSON :: forall a. (FromJSON a) => Text -> Either String a
@@ -143,7 +136,7 @@ scanQuotedStrings t = go (T.unpack t)
         | otherwise = go rest
 
 takeQuoted :: String -> Maybe Text
-takeQuoted cs = walk False [] cs
+takeQuoted = walk False []
   where
     walk _ _ [] = Nothing
     walk esc acc (x : xs)
@@ -193,9 +186,6 @@ scanPrimitive t = go (T.words t)
         cleanW = stripPunct w
         cleanNum = stripTrailingPunct w
 
-    stripPunct s =
-        T.dropAround (\c -> c `elem` ['.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '\'', '"']) s
-
     stripTrailingPunct s =
         T.dropWhileEnd
             (\c -> c `elem` ['.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '\'', '"'])
@@ -206,3 +196,5 @@ scanPrimitive t = go (T.words t)
         | otherwise = case reads (T.unpack s) :: [(Double, String)] of
             [(_, "")] -> True
             _ -> False
+
+    stripPunct = T.dropAround (\c -> c `elem` ['.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '\'', '"'])

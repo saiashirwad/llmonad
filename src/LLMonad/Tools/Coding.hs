@@ -7,10 +7,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
+
+{- HLINT ignore "Use >=>" -}
 
 {- | Standard coding agent tools for reading, editing, searching, and running commands.
 Built directly on the 'World' effect.
@@ -242,7 +243,7 @@ runViewFile ViewFileArgs{..} = do
                                         }
 
 truncateLines :: Int -> [ViewFileLine] -> ([ViewFileLine], Bool)
-truncateLines maxBytes linesList = go 0 [] linesList
+truncateLines maxBytes = go 0 []
   where
     go _ acc [] = (reverse acc, False)
     go curBytes acc (l : ls) =

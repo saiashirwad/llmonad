@@ -1,7 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -34,7 +33,7 @@ instance (LLM :> es, FromJSON a, ToSchema a) => AskFunction es (Eff es a) a wher
          in askStructured fullPrompt
 
 instance (AskFunction es fn a) => AskFunction es (Text -> fn) a where
-    askApply t args = \nextArg -> askApply @es @fn @a t (args ++ [nextArg])
+    askApply t args nextArg = askApply @es @fn @a t (args ++ [nextArg])
 
 -- | Curried ask combinator with return type as the first visible type application.
 ask :: forall a es fn. (AskFunction es fn a) => Text -> fn

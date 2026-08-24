@@ -21,6 +21,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (cancel, wait, withAsync)
 import Control.Exception qualified as E
 import Control.Monad (forM, when)
+import Data.Bifunctor (bimap)
 import Data.List (isPrefixOf, sort, tails)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -123,7 +124,7 @@ localWorldHandler canonicalRoot _ = \case
             then E.throwIO (WorldDirectoryNotFound fp)
             else do
                 names <- SD.listDirectory target
-                entries <- forM (sort names) $ \name -> do
+                forM (sort names) $ \name -> do
                     let itemTarget = target </> name
                     isD <- doesDirectoryExist itemTarget
                     sz <- if isD then pure 0 else E.catch (getFileSize itemTarget) (\(_ :: E.SomeException) -> pure 0)
@@ -136,7 +137,6 @@ localWorldHandler canonicalRoot _ = \case
                             , deSize = sz
                             , deModified = mtime
                             }
-                pure entries
     SearchFiles opts -> liftIO $ do
         searchRoot <- resolveSafeLocalPath canonicalRoot (soSearchDir opts)
         exists <- doesDirectoryExist searchRoot
@@ -222,7 +222,6 @@ collapseSegments p =
     let isAbs = isAbsolute p
         rawNorm = normalise p
         segs = splitDirectories rawNorm
-        cleanSeg s = dropTrailingPathSeparator s
         go [] acc = reverse acc
         go (s : ss) acc
             | sClean == "." || sClean == "" = go ss acc
@@ -236,6 +235,7 @@ collapseSegments p =
           where
             sClean = cleanSeg s
         collapsed = go segs []
+        cleanSeg = dropTrailingPathSeparator
      in case collapsed of
             [] -> if isAbs then "/" else "."
             (d : rest) -> foldl (</>) d rest
@@ -324,7 +324,7 @@ runLocalProcess spec defaultCwd = do
     cwdStr <- case cmdCwd spec of
         Nothing -> pure (Just defaultCwd)
         Just dir -> Just <$> resolveSafeLocalPath defaultCwd dir
-    let envList = fmap (map (\(k, v) -> (T.unpack k, T.unpack v))) (cmdEnv spec)
+    let envList = fmap (map (bimap T.unpack T.unpack)) (cmdEnv spec)
     let cp =
             (proc progStr argsStr)
                 { cwd = cwdStr
@@ -335,7 +335,7 @@ runLocalProcess spec defaultCwd = do
                 , create_group = True
                 }
 
-    let timeoutUs = fmap (\ms -> ms * 1000) (cmdTimeoutMs spec)
+    let timeoutUs = fmap (* 1000) (cmdTimeoutMs spec)
 
     (minH, moutH, merrH, ph) <- createProcess cp
 

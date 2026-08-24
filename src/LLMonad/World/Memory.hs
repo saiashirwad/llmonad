@@ -49,8 +49,7 @@ runWorldMemoryWithFiles ::
     [(FilePath, Text)] ->
     Eff (World : es) a ->
     Eff es (a, MemoryWorldState)
-runWorldMemoryWithFiles files action =
-    runWorldMemory (initMemoryWorld files) action
+runWorldMemoryWithFiles files = runWorldMemory (initMemoryWorld files)
 
 memoryWorldHandler :: EffectHandler World (State MemoryWorldState : es)
 memoryWorldHandler _ = \case
@@ -233,7 +232,7 @@ getAllMemEntries prefix allFiles =
         dirEntries =
             [ (d, True, pathDepth (if null prefix then d else makeRelative prefix d))
             | d <- allDirs
-            , if null prefix then True else d /= prefix && ((prefix ++ "/") `isPrefixOf` d)
+            , null prefix || (d /= prefix && ((prefix ++ "/") `isPrefixOf` d))
             ]
      in fileEntries ++ dirEntries
 

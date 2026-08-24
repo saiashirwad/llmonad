@@ -32,7 +32,7 @@ import Control.Category (Category (..))
 import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception (throwIO)
 import Control.Monad (when)
-import Data.Aeson (FromJSON, encode, object, parseJSON, (.=))
+import Data.Aeson (FromJSON, Value, encode, object, parseJSON, (.=))
 import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
@@ -222,19 +222,20 @@ runTextLoopWith opts availableTools instruction = withTransaction $ do
     specs = map toolSpec availableTools
 
     loop roundsLeft previousCalls
-        | roundsLeft <= 0 = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
+        | roundsLeft <= 0 = exhausted
         | otherwise = do
             response <- chatRound (agentParams opts) RfText specs ToolAuto
             case crspToolCalls response of
                 [] -> pure (crspText response)
                 calls
-                    | roundsLeft <= 1 -> liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
+                    -- Results from this batch would have no round left in
+                    -- which to be consumed, so executing them is pointless.
+                    | roundsLeft <= 1 -> exhausted
                     | otherwise -> do
-                        let currentCalls = [(toolCallName call, toolCallArguments call) | call <- calls]
-                        mapM_ (executeAndRecord availableTools) calls
-                        when (currentCalls == previousCalls && not (null currentCalls)) $
-                            pushMessage (UserMsg repeatedToolWarning)
-                        loop (roundsLeft - 1) currentCalls
+                        recordToolBatch availableTools previousCalls calls
+                        loop (roundsLeft - 1) (callSignatures calls)
+
+    exhausted = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
 
 -- | Structured tool loop with default 'AgentOpts'.
 runStructuredLoop ::
@@ -245,6 +246,18 @@ runStructuredLoop ::
     Eff es output
 runStructuredLoop = runStructuredLoopWith defaultAgentOpts
 
+-- | How the model is asked for its final answer during one structured run.
+data StructuredPhase
+    = -- | Tools are offered; answers arrive as plain text.
+      WithTools
+    | -- | No tools are offered and the JSON schema is forced server-side.
+      SchemaForced
+
+{- | Structured tool loop. Two phases: 'WithTools', where tool calls extend
+the conversation, and 'SchemaForced'. A run starts in 'SchemaForced' when no
+tools are configured, and any undecodable answer demotes the rest of the run
+to it — retries never leave that phase.
+-}
 runStructuredLoopWith ::
     forall output es.
     (LLM :> es, IOE :> es, FromJSON output, ToSchema output) =>
@@ -254,32 +267,40 @@ runStructuredLoopWith ::
     Eff es output
 runStructuredLoopWith opts availableTools instruction = withTransaction $ do
     pushMessage (UserMsg instruction)
-    toolLoop (agentMaxRounds opts) []
+    drive startPhase (agentMaxRounds opts) []
   where
     specs = map toolSpec availableTools
     schemaFormat = RfJsonSchema (schemaTypeName @output) (toSchema @output) True
 
-    toolLoop roundsLeft previousCalls
+    -- A run starts in 'WithTools' unless no tools are configured.
+    startPhase
+        | null availableTools = SchemaForced
+        | otherwise = WithTools
+
+    drive :: StructuredPhase -> Int -> [(Text, Value)] -> Eff es output
+    drive phase roundsLeft previousCalls
         | roundsLeft <= 0 = exhausted
-        | null availableTools = structuredLoop roundsLeft
         | otherwise = do
-            response <- chatRound (agentParams opts) RfText specs ToolAuto
-            case crspToolCalls response of
-                [] -> decodeOrRetry roundsLeft response
-                calls
-                    | roundsLeft <= 1 -> exhausted
-                    | otherwise -> do
-                        let currentCalls = [(toolCallName call, toolCallArguments call) | call <- calls]
-                        mapM_ (executeAndRecord availableTools) calls
-                        when (currentCalls == previousCalls && not (null currentCalls)) $
-                            pushMessage (UserMsg repeatedToolWarning)
-                        toolLoop (roundsLeft - 1) currentCalls
+            response <- request phase
+            case phase of
+                SchemaForced -> settle roundsLeft response
+                WithTools -> case crspToolCalls response of
+                    [] -> settle roundsLeft response
+                    calls
+                        -- Results from this batch would have no round left
+                        -- in which to be consumed, so executing is pointless.
+                        | roundsLeft <= 1 -> exhausted
+                        | otherwise -> do
+                            recordToolBatch availableTools previousCalls calls
+                            drive phase (roundsLeft - 1) (callSignatures calls)
 
-    structuredLoop roundsLeft
-        | roundsLeft <= 0 = exhausted
-        | otherwise = chatRound (agentParams opts) schemaFormat [] ToolAuto >>= decodeOrRetry roundsLeft
+    request WithTools = chatRound (agentParams opts) RfText specs ToolAuto
+    request SchemaForced = chatRound (agentParams opts) schemaFormat [] ToolAuto
 
-    decodeOrRetry roundsLeft response =
+    -- Finish with @response@ if it decodes; otherwise spend a round telling
+    -- the model what went wrong and demote the rest of the run to the
+    -- schema-forced phase.
+    settle roundsLeft response =
         case decodeResponse response of
             Right output -> pure output
             Left detail
@@ -289,7 +310,7 @@ runStructuredLoopWith opts availableTools instruction = withTransaction $ do
                         "Your final response could not be decoded ("
                             <> T.pack detail
                             <> "). Return only valid JSON that conforms to the schema."
-                    structuredLoop (roundsLeft - 1)
+                    drive SchemaForced (roundsLeft - 1) []
 
     decodeResponse response = case crspStructuredPayload response of
         Just value -> parseEither parseJSON value
@@ -308,6 +329,20 @@ executeAndRecord availableTools call = do
     let value = either (object . pure . ("error" .=)) id result
         content = decodeUtf8With lenientDecode . LBS.toStrict . encode $ value
     pushMessage (ToolMsg (toolCallId call) content)
+
+{- | Run one batch of tool calls, recording each result as a message, and warn
+the model when the batch repeats the previous batch verbatim. Callers only
+pass non-empty batches.
+-}
+recordToolBatch :: (LLM :> es) => [Tool (Eff es)] -> [(Text, Value)] -> [ToolCall] -> Eff es ()
+recordToolBatch availableTools previousCalls calls = do
+    mapM_ (executeAndRecord availableTools) calls
+    when (callSignatures calls == previousCalls) $
+        pushMessage (UserMsg repeatedToolWarning)
+
+-- | What identifies a tool call for repeat detection: name plus raw arguments.
+callSignatures :: [ToolCall] -> [(Text, Value)]
+callSignatures calls = [(toolCallName call, toolCallArguments call) | call <- calls]
 
 repeatedToolWarning :: Text
 repeatedToolWarning =

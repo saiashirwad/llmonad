@@ -108,7 +108,7 @@ runJournalFileWorld fp action = do
                 Left err -> Exception.throw (IO.userError ("Failed to load corrupted journal file " ++ fp ++ ": " ++ T.unpack err))
                 Right evs -> pure evs
             else pure []
-    fmap fst $ reinterpret (runState (initialEvents, initialText)) worldJournalHandler action
+    fst <$> reinterpret (runState (initialEvents, initialText)) worldJournalHandler action
   where
     worldJournalHandler :: EffectHandler Journal (State ([JournalEvent], Text) : es)
     worldJournalHandler _ = \case

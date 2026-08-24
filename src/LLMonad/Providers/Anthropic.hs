@@ -107,7 +107,7 @@ anthropicProviderWith cfg =
 messagesUrl :: AnthropicConfig -> Text
 messagesUrl cfg =
     let base = acBaseUrl cfg
-     in maybe base id (T.stripSuffix "/" base) <> "/v1/messages"
+     in fromMaybe base (T.stripSuffix "/" base) <> "/v1/messages"
 
 authHeaders :: AnthropicConfig -> [(Text, Text)]
 authHeaders cfg =
@@ -355,7 +355,7 @@ handleAnthropicEvent st payload = case A.eitherDecode' (LBS.fromStrict (encodeUt
     Left _ -> (st, [])
     Right ev -> case antEventType ev of
         Just "message_start" ->
-            (st{asInputTokens = maybe (asInputTokens st) id (antEvInputTokens ev)}, [])
+            (st{asInputTokens = fromMaybe (asInputTokens st) (antEvInputTokens ev)}, [])
         Just "content_block_start" ->
             let idx = fromMaybe 0 (antEvIndex ev)
                 acc = case antEvBlock ev of
@@ -380,7 +380,7 @@ handleAnthropicEvent st payload = case A.eitherDecode' (LBS.fromStrict (encodeUt
         Just "message_delta" ->
             ( st
                 { asStop = maybe (asStop st) (Just . stopFromText) (antEvStopReason ev)
-                , asOutputTokens = maybe (asOutputTokens st) id (antEvOutputTokens ev)
+                , asOutputTokens = fromMaybe (asOutputTokens st) (antEvOutputTokens ev)
                 }
             , []
             )
@@ -458,7 +458,7 @@ data AntEvent = AntEvent
     }
 
 instance A.FromJSON AntEvent where
-    parseJSON v = withObject "event" inner v
+    parseJSON = withObject "event" inner
       where
         inner o =
             AntEvent

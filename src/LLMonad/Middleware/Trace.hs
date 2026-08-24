@@ -19,6 +19,7 @@ module LLMonad.Middleware.Trace (
     traced,
 ) where
 
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -63,7 +64,7 @@ traceHandler emitTrace = \case
             ToolMsg cid content -> do
                 hist <- getHistory
                 let mName = findToolName cid hist
-                    tName = maybe "unknown" id mName
+                    tName = fromMaybe "unknown" mName
                     isOk = not ("\"error\"" `T.isInfixOf` content)
                 liftIO $
                     emitTrace
@@ -83,7 +84,6 @@ traceHandler emitTrace = \case
   where
     -- One request/response emission shared by both round kinds.
     tracedRound ::
-        (LLM :> es, IOE :> es) =>
         Eff es CompletionResponse ->
         Eff es CompletionResponse
     tracedRound action = do

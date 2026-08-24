@@ -160,14 +160,14 @@ openRouterProvider key =
 -- | Local Ollama. Pass the host, e.g. @http:\/\/localhost:11434@.
 ollamaProvider :: Text -> Provider
 ollamaProvider host =
-    let cleanHost = maybe host id (T.stripSuffix "/" host)
+    let cleanHost = fromMaybe host (T.stripSuffix "/" host)
         base = openAICompat (defaultOpenAICompatConfig (cleanHost <> "/v1"))
      in base{providerName = "ollama"}
 
 -- | LM Studio's local server. Pass the host, e.g. @http:\/\/localhost:1234@.
 lmStudioProvider :: Text -> Provider
 lmStudioProvider host =
-    let cleanHost = maybe host id (T.stripSuffix "/" host)
+    let cleanHost = fromMaybe host (T.stripSuffix "/" host)
         cfg =
             (defaultOpenAICompatConfig (cleanHost <> "/v1"))
                 { ocStructured = StructuredJsonObjectOnly
@@ -190,7 +190,7 @@ structuredTiers :: StructuredMode -> ResponseFormat -> [StructuredTier]
 structuredTiers mode rf = case rf of
     RfText -> [TierPromptOnly]
     RfJsonObject -> filterApplicable [TierJsonObject, TierPromptOnly]
-    RfJsonSchema _ _ _ ->
+    RfJsonSchema{} ->
         filterApplicable [TierJsonSchema True, TierJsonSchema False, TierJsonObject, TierPromptOnly]
   where
     filterApplicable = case mode of
@@ -224,7 +224,7 @@ isFormatRejection _ = False
 chatUrl :: OpenAICompatConfig -> Text
 chatUrl cfg =
     let base = ocBaseUrl cfg
-     in maybe base id (T.stripSuffix "/" base) <> "/chat/completions"
+     in fromMaybe base (T.stripSuffix "/" base) <> "/chat/completions"
 
 authHeaders :: OpenAICompatConfig -> [(Text, Text)]
 authHeaders cfg = case ocApiKey cfg of
@@ -322,7 +322,7 @@ encodeMessage m = case m of
     AssistantMsg t calls ->
         object $
             ["role" .= ("assistant" :: Text), "content" .= t]
-                ++ (if null calls then [] else ["tool_calls" .= map encCall calls])
+                ++ (["tool_calls" .= map encCall calls | not (null calls)])
     ToolMsg cid c ->
         object ["role" .= ("tool" :: Text), "content" .= c, "tool_call_id" .= cid]
   where
@@ -485,9 +485,7 @@ handleOpenAIChunk st payload
     deltas before after =
         let oldLen = T.length (osText before)
             newLen = T.length (osText after)
-         in if newLen > oldLen
-                then [SEText (T.takeEnd (newLen - oldLen) (osText after))]
-                else []
+         in ([SEText (T.takeEnd (newLen - oldLen) (osText after)) | newLen > oldLen])
 
 applyChoice :: OAIStreamState -> OAIChunkChoice -> OAIStreamState
 applyChoice st ch =
