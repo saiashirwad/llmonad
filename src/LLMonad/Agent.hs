@@ -15,7 +15,7 @@ module LLMonad.Agent (
     textAgent,
     structuredAgent,
     withAgentOpts,
-    bind,
+    mount,
     invoke,
     runAgent,
     runTextLoop,
@@ -116,35 +116,59 @@ withAgentOpts opts definition = definition{definitionOpts = opts}
 
 {- | Attach a model and toolset to a model-neutral definition.
 
-The toolset was validated at assembly time ('tools', '(<>)'); this function
-is where the model enters, and the only place that needs a 'ModelRuntime'.
+The toolset was validated at assembly time ('tools', '(<>)'), but duplicates
+can still slip in through lazy assembly or direct 'Toolset' construction — so
+'mount' re-checks here, at the last seam before tokens can be spent. This is
+where the model enters, and the only place that needs a 'ModelRuntime'.
 -}
-bind ::
+mount ::
     (IOE :> es) =>
     ModelRuntime es ->
     Toolset es ->
     AgentDef input output ->
     Agent es input output
-bind runtime toolset definition = case duplicateToolNamesIn toolset of
-    [] -> Agent $ \history input ->
+mount runtime toolset definition = either rejected wired (checkedToolset toolset)
+  where
+    -- Matching on the duplicate-name report forces the check at mount time;
+    -- only the error itself waits for the first call.
+    checkedToolset ts = case duplicateToolNamesIn ts of
+        [] -> Right ts
+        names -> Left names
+
+    rejected names = Agent $ \_history _input ->
+        liftIO . throwIO . AgentConfigurationError $
+            "duplicate tool names: " <> T.intercalate ", " names
+
+    -- One call: a fresh model session seeded with @history@, the
+    -- definition's system prompt and loop, and the conversation it leaves.
+    wired ts = Agent $ \history input ->
         runModelRuntime runtime $ do
-            setHistory history
-            maybe clearSystem setSystem (definitionSystem definition)
+            seedSession history
+            answer <-
+                runLoopFor
+                    (definitionOpts definition)
+                    [hoistTool raise t | t <- toolsetTools ts]
+                    (definitionPrompt definition input)
+                    (definitionOutput definition)
+            (answer,) <$> getHistory
 
-            let availableTools = map (hoistTool raise) (toolsetTools toolset)
-                prompt = definitionPrompt definition input
-                opts = definitionOpts definition
+    seedSession history = do
+        setHistory history
+        maybe clearSystem setSystem (definitionSystem definition)
 
-            result <- case definitionOutput definition of
-                TextOutput -> runTextLoopWith opts availableTools prompt
-                StructuredOutput -> runStructuredLoopWith opts availableTools prompt
-
-            finalHistory <- getHistory
-            pure (result, finalHistory)
-    names ->
-        Agent $ \_history _input ->
-            liftIO . throwIO . AgentConfigurationError $
-                "duplicate tool names: " <> T.intercalate ", " names
+{- | A definition's output kind selects its conversation loop. Private until
+a third output mode earns it a seam.
+-}
+runLoopFor ::
+    (LLM :> es, IOE :> es) =>
+    AgentOpts ->
+    [Tool (Eff es)] ->
+    Text ->
+    AgentOutput output ->
+    Eff es output
+runLoopFor opts available prompt output = case output of
+    TextOutput -> runTextLoopWith opts available prompt
+    StructuredOutput -> runStructuredLoopWith opts available prompt
 
 -- | Call an agent. Each call starts a fresh conversation.
 runAgent :: Agent es input output -> input -> Eff es output
@@ -153,11 +177,6 @@ runAgent agent input = fst <$> runAgentFrom agent [] input
 -- | Run an agent with a fresh conversation. Friendly spelling of 'runAgent'.
 invoke :: Agent es input output -> input -> Eff es output
 invoke = runAgent
-
-{- | Return a stateful twin of an agent. The twin has the same type and stays
-callable, but keeps one conversation across calls. Its own calls serialize;
-different sessions run concurrently.
--}
 
 {- | Return a stateful twin of an agent. The twin has the same type and stays
 callable, but keeps one conversation across calls. Its own calls serialize;

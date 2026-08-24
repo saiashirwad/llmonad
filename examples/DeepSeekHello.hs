@@ -17,6 +17,6 @@ workflow = invoke
 main :: IO ()
 main = do
     runtime <- deepSeekRuntime "deepseek-v4-flash"
-    let haskellAgent = bind runtime noTools definition
+    let haskellAgent = mount runtime noTools definition
     reply <- runEff (workflow haskellAgent "Give me one useful fact about Haskell.")
     TIO.putStrLn reply

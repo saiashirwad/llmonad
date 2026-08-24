@@ -1,5 +1,19 @@
 # Revision history for llmonad
 
+## 0.3.0.0 -- 2026-08-24
+
+**Breaking**
+
+- `bind` is renamed to `mount`: "attach a model and toolset to a
+  definition" no longer shares its name with monadic bind, which the
+  `Monad (Agent)` instance also uses with different meaning. Mechanical
+  rename at all call sites; no behavior change.
+- `mount` is restructured internally into named stages (`checkedToolset`,
+  `rejected`, `wired`, `seedSession`, and a private `runLoopFor` that maps a
+  definition's output kind onto its conversation loop). Same eagerness as
+  before: duplicate tool names are detected at mount time; only the error
+  itself waits for the first agent call.
+
 ## 0.2.0.0 -- 2026-08-21
 
 A ground-up rebuild of the toy 0.1 prototype into a proper DSL.

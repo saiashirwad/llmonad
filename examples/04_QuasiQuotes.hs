@@ -47,7 +47,7 @@ model is named; swapping DeepSeek, OpenAI, or a mock script changes nothing else
 -}
 taxAgent :: (IOE :> es) => ModelRuntime es -> Agent es Text Text
 taxAgent runtime =
-    bind
+    mount
         runtime
         (tools [hoistTool liftIO taxTool])
         (textAgent "Answer sales-tax questions using the provided tool." id)

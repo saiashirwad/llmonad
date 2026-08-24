@@ -16,8 +16,8 @@ spec = do
             store <- newInMemoryCache
             let provider = recordingProvider requests (const "ok")
                 cachedAgent =
-                    bind (applyMiddleware (cached (Model "m") store) (model provider "m")) noTools definition
-                plainAgent = bind (model provider "m") noTools definition
+                    mount (applyMiddleware (cached (Model "m") store) (model provider "m")) noTools definition
+                plainAgent = mount (model provider "m") noTools definition
 
             (firstAnswer, secondAnswer, _) <- runEff $ do
                 firstAnswer <- invoke cachedAgent "hi"
@@ -36,7 +36,7 @@ spec = do
             traces <- newIORef []
             let emit trace = atomicModifyIORef' traces (\ts -> (ts ++ [trace], ()))
                 scripted = mockModel [Right (textResp "a"), Right (textResp "b")]
-                agentFor mw = bind (applyMiddleware mw scripted) noTools definition
+                agentFor mw = mount (applyMiddleware mw scripted) noTools definition
 
             -- Cache outermost: the second identical round never reaches trace.
             _ <- runEff $ do

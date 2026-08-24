@@ -8,7 +8,7 @@ a 'ModelRuntime' in one line:
 
 > main = do
 >     runtime <- deepSeekRuntime "deepseek-v4-flash"
->     reply <- runEff . invoke $ bind runtime noTools definition
+>     reply <- runEff . invoke $ mount runtime noTools definition
 -}
 module DeepSeek (deepSeekRuntime) where
 

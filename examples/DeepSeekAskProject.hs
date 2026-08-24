@@ -29,7 +29,7 @@ main = do
             _ -> T.pack (unwords arguments)
     runtime <- deepSeekRuntime "deepseek-v4-flash"
     let projectAgent =
-            bind
+            mount
                 runtime
                 readOnlyCodingToolset
                 definition

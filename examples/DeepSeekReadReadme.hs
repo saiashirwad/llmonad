@@ -23,7 +23,7 @@ main = do
     runtime <- deepSeekRuntime "deepseek-v4-flash"
     projectRoot <- getCurrentDirectory
     let projectReader =
-            bind
+            mount
                 runtime
                 (tools [viewFileTool])
                 definition

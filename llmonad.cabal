@@ -1,6 +1,6 @@
 cabal-version:   3.4
 name:            llmonad
-version:         0.2.0.0
+version:         0.3.0.0
 license:         MIT
 license-file:    LICENSE
 maintainer:      saiashirwadr@gmail.com

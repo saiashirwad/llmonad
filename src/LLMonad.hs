@@ -131,7 +131,7 @@ module LLMonad (
     textAgent,
     structuredAgent,
     withAgentOpts,
-    bind,
+    mount,
     invoke,
     runAgent,
     runTextLoop,

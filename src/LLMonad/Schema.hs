@@ -60,6 +60,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Foldable (foldl')
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Scientific (Scientific)
 import Data.Set qualified as Set
@@ -176,7 +177,7 @@ objSchema :: [(Text, Value)] -> Value
 objSchema props =
     object
         [ "type" .= ("object" :: Text)
-        , "properties" .= object [(Key.fromText k) .= v | (k, v) <- props]
+        , "properties" .= object [Key.fromText k .= v | (k, v) <- props]
         , "required" .= map fst props
         , "additionalProperties" .= False
         ]
@@ -269,7 +270,7 @@ instance (GSum f) => GToSchema (D1 d f) where
     gToSchema _ =
         let n = sumCount (undefined :: f p)
          in if n == 1
-                then maybe (object []) id (sumSingle (undefined :: f p))
+                then fromMaybe (object []) (sumSingle (undefined :: f p))
                 else
                     if sumAllNullary (undefined :: f p)
                         then enumOf (sumNames (undefined :: f p))

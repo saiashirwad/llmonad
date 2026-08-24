@@ -47,8 +47,8 @@ generateToolExp toolName name typ = do
                 else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) $(varE name)|]
         2 ->
             if isIO
-                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b) -> $(varE name) a b)|]
-                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b) -> $(varE name) a b)|]
+                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (uncurry $(varE name))|]
+                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (uncurry $(varE name))|]
         3 ->
             if isIO
                 then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b, c) -> $(varE name) a b c)|]

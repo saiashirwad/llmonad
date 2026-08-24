@@ -23,8 +23,8 @@ spec = do
         it "keeps model selection outside the workflow" $ do
             requests <- newIORef []
             let provider = recordingProvider requests modelAnswer
-                writer = bind (model provider "writer-model") noTools definition
-                reviewer = bind (model provider "reviewer-model") noTools definition
+                writer = mount (model provider "writer-model") noTools definition
+                reviewer = mount (model provider "reviewer-model") noTools definition
 
             result <- runEff (pipeline writer reviewer "draft")
 
@@ -35,7 +35,7 @@ spec = do
         it "starts a fresh conversation for each invocation" $ do
             requests <- newIORef []
             let provider = recordingProvider requests (const "ok")
-                configuredAgent = bind (model provider "test-model") noTools definition
+                configuredAgent = mount (model provider "test-model") noTools definition
 
             _ <- runEff $ concurrently (invoke configuredAgent "one") (invoke configuredAgent "two")
 
@@ -45,7 +45,7 @@ spec = do
         it "keeps history only in an explicit session" $ do
             requests <- newIORef []
             let provider = recordingProvider requests (T.pack . show . length . crMessages)
-                configuredAgent = bind (model provider "test-model") noTools definition
+                configuredAgent = mount (model provider "test-model") noTools definition
 
             (first, second) <- runEff $ do
                 session <- start configuredAgent
@@ -61,7 +61,7 @@ spec = do
         it "composes toolsets" $ do
             requests <- newIORef []
             let provider = recordingProvider requests (const "ok")
-                configuredAgent = bind (model provider "test-model") (tools [firstTool] <> tools [secondTool]) definition
+                configuredAgent = mount (model provider "test-model") (tools [firstTool] <> tools [secondTool]) definition
 
             _ <- runEff (invoke configuredAgent "use tools")
 
@@ -73,7 +73,7 @@ spec = do
         it "rejects duplicate tool names" $ do
             requests <- newIORef []
             let provider = recordingProvider requests (const "ok")
-                configuredAgent = bind (model provider "test-model") (tools [firstTool, firstTool]) definition
+                configuredAgent = mount (model provider "test-model") (tools [firstTool, firstTool]) definition
 
             result <- try @LLMError (runEff (invoke configuredAgent "use tools"))
 
@@ -87,7 +87,7 @@ spec = do
             let structuredDefinition :: AgentDef Text Int
                 structuredDefinition = structuredAgent "Return the number." id
                 configuredAgent =
-                    bind
+                    mount
                         (mockModel [Right (structuredResp (toJSON (42 :: Int)))])
                         noTools
                         structuredDefinition

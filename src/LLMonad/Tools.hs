@@ -175,7 +175,7 @@ tools toolList = case duplicateToolNamesIn (Toolset toolList) of
     names -> throw (AgentConfigurationError ("duplicate tool names: " <> T.intercalate ", " names))
 
 {- | Names that appear more than once in a toolset (empty when it is valid).
-Exposed so callers like 'bind' can surface the failure eagerly instead of
+Exposed so callers like 'mount' can surface the failure eagerly instead of
 whenever the tool list happens to be forced.
 -}
 duplicateToolNamesIn :: Toolset es -> [Text]
