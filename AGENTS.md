@@ -79,9 +79,11 @@ Every new module is held to them. When reviewing your own diff, check each one.
   `mockModel` scripts are the test adapter. Nothing above the seam names a
   provider, model, or HTTP detail — term level or type level.
 - **Function-face abstractions**: model concepts on newtypes over functions
-  and derive standard classes (`Category`, `Functor`) instead of inventing
-  combinator zoos. An `Agent es i o` is callable; workflows are plain
-  functions taking agents.
+  and derive standard classes (`Category`, `Functor`, `Monad`) instead of
+  inventing combinator zoos. An `Agent es i o` is callable; workflows are
+  plain functions taking agents. When the internal representation threads
+  extra state, write instance bodies against that engine face explicitly —
+  textbook one-liners silently type-check against the wrong shape.
 - **Seams earn their existence**: one adapter = hypothetical seam (don't
   build it); two adapters = real seam. Enforce invariants with additional
   interpreters (e.g. a read-only World) rather than phantom type parameters.
@@ -89,6 +91,38 @@ Every new module is held to them. When reviewing your own diff, check each one.
   before tokens are spent, not mid-invocation.
 - **Capability via effect rows**: tools declare required effects
   (`World :> es`) at construction; rows discharge once at the edge.
+
+10. **Laziness defers everything you meant to do now.** A pure `throw` inside
+    a smart constructor fires only when its result happens to be forced —
+    "validated at construction" is a false promise unless construction is
+    actually demanded. Pair such guards with an eager check at the seam that
+    consumes the value (see `tools` + `duplicateToolNamesIn` in `Tools.hs`,
+    consumed by `bind`), and say in the haddock where the guarantee holds.
+
+11. **Prove "no callers" before deleting an export.** Search all of `src`,
+    `test`, *and* `examples`, and never trust truncated output — a `head`ed
+    grep once hid live callers in an example and broke the build two steps
+    later.
+
+## Effectful conventions
+
+These come from real breakage in this repo. They are the difference between a
+handler refactor compiling first try and burning three rebuild cycles.
+
+- **Factoring an `interpose_` lambda into a named function**: annotate it
+  `EffectHandler_ e es` — *not* `EffectHandler`, which carries an explicit
+  `LocalEnv` argument. Where-bound helpers inside a handler need signatures
+  pinning them to the outer row (e.g. `Eff es CompletionResponse`);
+  unannotated helpers generalize too early and die with "`es0` is
+  untouchable".
+- **When an installed package's API disagrees with your memory, ask GHCi**
+  (`cabal repl`, then `:i` / `:t`) before writing code against it. Package
+  changelogs and blog posts are not ground truth; the type is.
+- **Instance method binders must be visible**: `import Control.Category
+  (Category)` alone makes `id = …` fail ("not a visible method"). Import the
+  methods (`Category (..)`) and hide Prelude's clashes (`import Prelude
+  hiding (id, (.))`) — ordinary composition keeps working through
+  `instance Category (->)`.
 
 ## Repo facts
 
