@@ -12,14 +12,14 @@ and automatic Haskell function tool generation with makeTool.
 -}
 module Main where
 
-import Data.Aeson (FromJSON, ToJSON, toJSON)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Effectful
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import DeepSeek (deepSeekRuntime)
+import Effectful (IOE, liftIO, runEff, (:>))
 import GHC.Generics (Generic)
 import LLMonad
-import System.Environment (lookupEnv)
 
 data TaxLookupArgs = TaxLookupArgs
     { country :: Text
@@ -45,15 +45,15 @@ taxTool = $(makeTool 'computeTax)
 {- | Wire the generated tool onto any model runtime. This is the only place a
 model is named; swapping DeepSeek, OpenAI, or a mock script changes nothing else.
 -}
-taxAgent :: ModelRuntime es -> Agent es Text Text
+taxAgent :: (IOE :> es) => ModelRuntime es -> Agent es Text Text
 taxAgent runtime =
     bind
         runtime
         (tools [hoistTool liftIO taxTool])
         (textAgent "Answer sales-tax questions using the provided tool." id)
 
-query :: Text
-query =
+taxQuery :: Text
+taxQuery =
     let customerName = "Alice" :: Text
         item = "Laptop" :: Text
         price = 1200.00 :: Double
@@ -61,17 +61,6 @@ query =
 
 main :: IO ()
 main = do
-    mKey <- lookupEnv "OPENAI_API_KEY"
-    case mKey of
-        Just k -> do
-            putStrLn "--- Live: OpenAI with makeTool Splice ---"
-            reply <- runEff (invoke (taxAgent (model (openAIProvider (T.pack k)) "gpt-4o-mini")) query)
-            TIO.putStrLn ("Agent Answer:\n" <> reply)
-        Nothing -> do
-            putStrLn "Note: OPENAI_API_KEY not set; executing against pure in-memory mock handler.\n"
-            let script =
-                    [ Right (toolResp [ToolCall "call-1" "computeTax" (toJSON (TaxLookupArgs "DE" 1200.00))])
-                    , Right (textResp "The applicable sales tax for Germany (19%) on a $1200 Laptop is $228.00.")
-                    ]
-            reply <- runEff (invoke (taxAgent (mockModel script)) query)
-            TIO.putStrLn ("Agent Answer:\n" <> reply)
+    runtime <- deepSeekRuntime "deepseek-v4-flash"
+    reply <- runEff (invoke (taxAgent runtime) taxQuery)
+    TIO.putStrLn ("Agent Answer:\n" <> reply)

@@ -4,10 +4,10 @@ module Main (main) where
 
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
+import DeepSeek (deepSeekRuntime)
 import Effectful (Eff, runEff)
 import LLMonad
 import System.Directory (getCurrentDirectory)
-import System.Environment (lookupEnv)
 
 definition :: AgentDef T.Text T.Text
 definition =
@@ -20,19 +20,12 @@ workflow projectReader = invoke projectReader "Read README.md and give a short p
 
 main :: IO ()
 main = do
-    key <- requireDeepSeekKey
+    runtime <- deepSeekRuntime "deepseek-v4-flash"
     projectRoot <- getCurrentDirectory
     let projectReader =
             bind
-                (model (deepSeekProvider key) "deepseek-v4-flash")
+                runtime
                 (tools [viewFileTool])
                 definition
     reply <- runEff . runWorldLocal projectRoot $ workflow projectReader
     TIO.putStrLn reply
-
-requireDeepSeekKey :: IO T.Text
-requireDeepSeekKey = do
-    value <- lookupEnv "DEEPSEEK_API_KEY"
-    case value of
-        Just key | not (null key) -> pure (T.pack key)
-        _ -> fail "DEEPSEEK_API_KEY is not set"

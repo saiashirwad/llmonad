@@ -103,6 +103,7 @@ library
 executable deepseek-hello
     main-is:            DeepSeekHello.hs
     hs-source-dirs:     examples
+    other-modules:       DeepSeek
     default-language:   GHC2021
     default-extensions:
         DataKinds DeriveAnyClass DeriveGeneric DerivingStrategies
@@ -125,6 +126,7 @@ executable deepseek-hello
 executable deepseek-read-readme
     main-is:            DeepSeekReadReadme.hs
     hs-source-dirs:     examples
+    other-modules:       DeepSeek
     default-language:   GHC2021
     default-extensions:
         DataKinds DeriveAnyClass DeriveGeneric DerivingStrategies
@@ -148,6 +150,7 @@ executable deepseek-read-readme
 executable deepseek-ask-project
     main-is:            DeepSeekAskProject.hs
     hs-source-dirs:     examples
+    other-modules:       DeepSeek
     default-language:   GHC2021
     default-extensions:
         DataKinds DeriveAnyClass DeriveGeneric DerivingStrategies
@@ -171,6 +174,7 @@ executable deepseek-ask-project
 executable deepseek-review-file
     main-is:            DeepSeekReviewFile.hs
     hs-source-dirs:     examples
+    other-modules:       DeepSeek
     default-language:   GHC2021
     default-extensions:
         DataKinds DeriveAnyClass DeriveGeneric DerivingStrategies
@@ -189,6 +193,32 @@ executable deepseek-review-file
         aeson >=2.0 && <3,
         effectful >=2.5 && <2.7,
         llmonad,
+        template-haskell >=2.19 && <2.24,
+        text >=1.2 && <2.2
+
+executable quasiquotes-example
+    main-is:            04_QuasiQuotes.hs
+    hs-source-dirs:     examples
+    other-modules:       DeepSeek
+    default-language:   GHC2021
+    default-extensions:
+        DataKinds DeriveAnyClass DeriveGeneric DerivingStrategies
+        FlexibleContexts FlexibleInstances GADTs GeneralizedNewtypeDeriving
+        LambdaCase MultiParamTypeClasses OverloadedStrings RecordWildCards
+        ScopedTypeVariables TypeApplications TypeFamilies TypeOperators
+        UndecidableInstances
+
+    ghc-options:
+        -Wall -Wcompat -Widentities -Wincomplete-record-updates
+        -Wincomplete-uni-patterns -Wmissing-home-modules -Wpartial-fields
+        -Wredundant-constraints
+
+    build-depends:
+        base >=4.16 && <5,
+        aeson >=2.0 && <3,
+        effectful >=2.5 && <2.7,
+        llmonad,
+        template-haskell >=2.19 && <2.24,
         text >=1.2 && <2.2
 
 test-suite llmonad-test

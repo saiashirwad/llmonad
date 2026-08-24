@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -22,6 +21,7 @@ module LLMonad.Middleware.RateLimit (
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar
+import Control.Monad (when)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful
 import Effectful.Dispatch.Dynamic
@@ -53,16 +53,14 @@ newRateLimiter rate capacity = do
                             let elapsed = max 0 (curNow - lastTime)
                             let replenished = min capacity (tokens + elapsed * rate)
                             if replenished >= costD
-                                then pure ((replenished - costD, curNow), (0 :: Double))
+                                then pure ((replenished - costD, curNow), 0 :: Double)
                                 else do
                                     let deficit = costD - replenished
                                     let waitSecs = deficit / rate
                                     pure ((replenished, curNow), waitSecs)
-                        if shouldWait > 0
-                            then do
-                                threadDelay (ceiling (shouldWait * 1000000))
-                                loop
-                            else pure ()
+                        when (shouldWait > 0) $ do
+                            threadDelay (ceiling (shouldWait * 1000000))
+                            loop
                 loop
             , rlUpdate = \_ -> pure ()
             }
@@ -91,7 +89,6 @@ rateLimitHandler limiter = \case
     ClearSystem -> send ClearSystem
   where
     limited ::
-        (LLM :> es, IOE :> es) =>
         Eff es CompletionResponse ->
         Eff es CompletionResponse
     limited action = do

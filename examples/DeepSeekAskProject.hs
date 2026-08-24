@@ -4,10 +4,11 @@ module Main (main) where
 
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
+import DeepSeek (deepSeekRuntime)
 import Effectful (Eff, runEff)
 import LLMonad
 import System.Directory (getCurrentDirectory)
-import System.Environment (getArgs, lookupEnv)
+import System.Environment (getArgs)
 
 definition :: AgentDef T.Text T.Text
 definition =
@@ -22,22 +23,15 @@ workflow = invoke
 main :: IO ()
 main = do
     arguments <- getArgs
-    key <- requireDeepSeekKey
     projectRoot <- getCurrentDirectory
     let question = case arguments of
             [] -> "Describe the main modules and how they work together."
             _ -> T.pack (unwords arguments)
-        projectAgent =
+    runtime <- deepSeekRuntime "deepseek-v4-flash"
+    let projectAgent =
             bind
-                (model (deepSeekProvider key) "deepseek-v4-flash")
+                runtime
                 readOnlyCodingToolset
                 definition
     reply <- runEff . runWorldLocal projectRoot $ workflow projectAgent question
     TIO.putStrLn reply
-
-requireDeepSeekKey :: IO T.Text
-requireDeepSeekKey = do
-    value <- lookupEnv "DEEPSEEK_API_KEY"
-    case value of
-        Just key | not (null key) -> pure (T.pack key)
-        _ -> fail "DEEPSEEK_API_KEY is not set"

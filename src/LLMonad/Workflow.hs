@@ -43,5 +43,5 @@ mapConcurrentlyN limit run values
         withEffToIO (ConcUnlift Ephemeral Unlimited) $ \unlift -> do
             semaphore <- newQSem limit
             Async.mapConcurrently
-                (\value -> bracket_ (waitQSem semaphore) (signalQSem semaphore) (unlift (run value)))
+                (bracket_ (waitQSem semaphore) (signalQSem semaphore) . unlift . run)
                 values

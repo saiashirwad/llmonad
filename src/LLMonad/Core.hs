@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -159,10 +158,8 @@ retry maxAttempts act = go 1
   where
     initialBackoffMicros :: Int
     initialBackoffMicros = 100000 -- 100ms
-
     maxBackoffMicros :: Int
     maxBackoffMicros = 10000000 -- 10s
-
     go attemptNum
         | attemptNum >= maxAttempts = act
         | otherwise =

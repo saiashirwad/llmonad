@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeOperators #-}
-
 {- | First-class model middleware.
 
 A 'Middleware' wraps a 'ModelRuntime' so cache, tracing, and rate-limiting

@@ -31,9 +31,10 @@ module LLMonad.Agent (
 import Control.Category (Category (..))
 import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception (throwIO)
-import Control.Monad (when, (<=<))
+import Control.Monad (when)
 import Data.Aeson (FromJSON, encode, object, parseJSON, (.=))
 import Data.Aeson.Types (parseEither)
+import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (find)
 import Data.Text (Text)
@@ -128,9 +129,7 @@ bind runtime toolset definition = case duplicateToolNamesIn toolset of
     [] -> Agent $ \history input ->
         runModelRuntime runtime $ do
             setHistory history
-            case definitionSystem definition of
-                Nothing -> clearSystem
-                Just systemPrompt -> setSystem systemPrompt
+            maybe clearSystem setSystem (definitionSystem definition)
 
             let availableTools = map (hoistTool raise) (toolsetTools toolset)
                 prompt = definitionPrompt definition input
@@ -304,8 +303,7 @@ repeatedToolWarning =
 
 instance Functor (Agent es input) where
     fmap f (Agent step) = Agent $
-        \history input ->
-            (\(output, history') -> (f output, history')) <$> step history input
+        \history input -> first f <$> step history input
 
 instance Applicative (Agent es input) where
     pure x = Agent (\history _input -> pure (x, history))

@@ -72,6 +72,7 @@ cabal run deepseek-hello
 cabal run deepseek-read-readme
 cabal run deepseek-ask-project -- "Where is the World effect interpreted?"
 cabal run deepseek-review-file -- src/LLMonad/Agent.hs
+cabal run quasiquotes-example
 ```
 
 ## Development

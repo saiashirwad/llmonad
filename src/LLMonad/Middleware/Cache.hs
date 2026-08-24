@@ -63,9 +63,7 @@ newInMemoryCache = do
         CacheStore
             { cacheLookup = \req -> atomicModifyIORef' ref (\m -> (m, Map.lookup (keyOf req) m))
             , cacheInsert = \req resp ->
-                if isCacheableResponse resp
-                    then atomicModifyIORef' ref (\m -> (Map.insert (keyOf req) resp m, ()))
-                    else pure ()
+                when (isCacheableResponse resp) $ atomicModifyIORef' ref (\m -> (Map.insert (keyOf req) resp m, ()))
             }
 
 {- | Handler interposing caching on the 'LLM' effect.
