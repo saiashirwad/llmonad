@@ -10,10 +10,30 @@ edge discharges it for the whole run.
 - `runWorldLocal "./workspace"` resolves every path a tool touches inside
   that root and fails on anything else. Other interpreters serve files from
   memory or run them in a throwaway Git worktree.
+
+  ```haskell
+  runEff . runWorldLocal "./workspace" $ invoke researcher "summarize the README"
+  -- paths outside ./workspace fail; runWorldMemoryWithFiles and
+  -- runWorldWorktree are other interpreters
+  ```
+
 - `mount` a scripted model instead of a live provider and the same workflow
   runs in tests, with no network and no disk.
+
+  ```haskell
+  let researcher =
+        mount (mockModel [Right (textResp "evidence")]) researchTools researcherDef
+  -- scripted answers instead of a provider; only the mount argument changes
+  ```
+
 - Workflow code never names a provider, a model, or an HTTP detail. Agents
   are values; workflows are functions taking them.
+
+  ```haskell
+  workflow :: Agent es Text Text -> Agent es Text Text -> Eff es Text
+  workflow researcher reviewer =
+    invoke researcher "read the project" >>= invoke reviewer
+  ```
 
 How to read the signatures:
 
