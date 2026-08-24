@@ -15,6 +15,8 @@ import GHC.Generics (Generic)
 import LLMonad
 import LLMonad.Journal.Strict
 import LLMonad.Journal.Types (emptyModelMetrics)
+import LLMonad.Model (runModelRuntime)
+import LLMonad.Types qualified as Types
 import Test.Hspec
 
 -- A recording with one tool-backed turn followed by a final answer.
@@ -32,6 +34,12 @@ fullRecording =
 
 readmeArgs :: Value
 readmeArgs = object ["path" .= ("README.md" :: Text)]
+
+argsFor :: Text -> Value
+argsFor p = object ["path" .= p]
+
+bodyOf :: Text -> Value
+bodyOf b = object ["body" .= b]
 
 data ReadArgs = ReadArgs {path :: Text}
     deriving (Generic, FromJSON, ToSchema)
@@ -83,6 +91,20 @@ spec =
                                 (Just (Right (object ["lines" .= (3 :: Int)])))
                             ]
                         }
+
+            it "gives each invocation of a reused call id its own result" $ do
+                -- recordToolCall writes the tool name as the call id, so a
+                -- tool called twice yields two invocations sharing one id.
+                let evs =
+                        [ ToolInvokedSimple "view_file" (argsFor "a.hs")
+                        , ToolCompleted "view_file" (Right (bodyOf "FIRST"))
+                        , ToolInvokedSimple "view_file" (argsFor "b.hs")
+                        , ToolCompleted "view_file" (Right (bodyOf "SECOND"))
+                        ]
+                scriptToolCalls (extractReplayScript evs)
+                    `shouldBe` [ RecordedToolCall "view_file" "view_file" (argsFor "a.hs") (Just (Right (bodyOf "FIRST")))
+                               , RecordedToolCall "view_file" "view_file" (argsFor "b.hs") (Just (Right (bodyOf "SECOND")))
+                               ]
 
             it "leaves invocations without a completion result-less" $ do
                 let evs =
@@ -172,3 +194,43 @@ spec =
                 agent <- replayMount script (textAgent "sys" id)
                 out <- runEff . fmap fst . runWorldMemoryWithFiles [] $ invoke agent "go"
                 out `shouldBe` "settled"
+
+            it "names each excess turn by its own ordinal, not the recording's end" $ do
+                agent <- replayMount (ReplayScript [] []) (textAgent "sys" id)
+                let call = try @LLMError . runEff . fmap fst . runWorldMemoryWithFiles [] . invoke agent
+                diverged <- mapM call ["a", "b"]
+                diverged
+                    `shouldBe` [ Left (ReplayDivergence "strict replay: model turn #1 was not in the recording")
+                               , Left (ReplayDivergence "strict replay: model turn #2 was not in the recording")
+                               ]
+
+            it "raises when the recording used a tool this toolset no longer has" $ do
+                let script =
+                        ReplayScript
+                            { scriptTurns =
+                                [ RecordedTurn "" [ToolCall "c1" "view_file" readmeArgs]
+                                , RecordedTurn "done" []
+                                ]
+                            , scriptToolCalls =
+                                [RecordedToolCall "c1" "view_file" readmeArgs (Just (Right (object [])))]
+                            }
+                rt <- strictReplayRuntime script
+                stripped <- strictReplayToolset script noTools
+                res <-
+                    try @LLMError . runEff . fmap fst . runWorldMemoryWithFiles [] $
+                        invoke (mount rt stripped (textAgent "sys" id)) "go"
+                res
+                    `shouldBe` Left
+                        (ReplayDivergence "strict replay: the recording called tool 'view_file', which this toolset no longer has")
+
+        describe "conversation scope" $
+            -- The library's promise is that one workflow runs against a live
+            -- provider, a mock, or a recording. All three scope a conversation
+            -- to one invocation; a shared one would let concurrent agents
+            -- write into each other's history.
+            it "starts each invocation from an empty conversation, as model and mockModel do" $ do
+                rt <- strictReplayRuntime (ReplayScript [] [])
+                carried <- runEff $ do
+                    runModelRuntime rt (pushMessage (Types.UserMsg "from an earlier invocation"))
+                    runModelRuntime rt getHistory
+                carried `shouldBe` []

@@ -2,15 +2,11 @@
 
 LLMonad is an [Effectful](https://github.com/haskell-effectful/effectful)
 library for typed LLM agents, tools, and workflows: agents call tools, and
-workflows compose agents. It has one rule: workflow code never names a
-provider, a model, or an HTTP detail. Agents are values, workflows are plain
-functions over them, and a model attaches only at the program edge — so the
-same workflow runs against a live provider, a scripted mock, or a recorded
-session.
+workflows compose agents. Workflow code never names a provider, a model, or
+an HTTP detail. A model attaches at the program edge, so the same workflow
+runs against a live provider, a scripted mock, or a recorded session.
 
-## The whole program at a glance
-
-One agent, one tool, one model:
+## The whole program
 
 ```haskell
 {-# LANGUAGE OverloadedStrings #-}
@@ -22,48 +18,37 @@ import Effectful
 import LLMonad
 import System.Environment (getEnv)
 
--- The definition: what the agent is. No model appears here.
+-- An AgentDef is the agent's specification: its system prompt, how inputs
+-- become prompt text, and the shape of its answers (plain text here).
+-- It names no model.
 readerDef :: AgentDef Text Text
 readerDef = textAgent "Inspect the project and answer from its files." id
 
 main :: IO ()
 main = do
   key <- T.pack <$> getEnv "DEEPSEEK_API_KEY"
-  -- The edge: the only lines that name a provider and a model.
   let runtime = model (deepSeekProvider key) "deepseek-v4-flash"
+      -- mount attaches a model runtime and a toolset to a definition and
+      -- returns a callable Agent. Only mount ever names a provider.
       reader = mount runtime (tools [viewFileTool]) readerDef
+  -- The program edge: runWorldLocal interprets file access, confined to
+  -- the root ".". invoke calls the agent once, from an empty conversation.
   reply <- runEff . runWorldLocal "." $ invoke reader "Summarize README.md."
   TIO.putStrLn reply
 ```
 
-Four names carry the program:
-
-- `textAgent` builds an `AgentDef`: the agent's system prompt, how inputs
-  become prompt text, and that it answers in plain text.
-- `mount` turns a definition into a callable `Agent` by attaching a model
-  runtime and a toolset. It is the only place a provider is named.
-- `invoke` calls the agent once, starting from an empty conversation.
-- `runEff . runWorldLocal "."` is the program edge: above it, effects exist
-  only in types; here they become real work. `runWorldLocal` interprets file
-  access and confines every path to the root you give it.
-
 ## The same program in a test
 
-Swap the arguments to `mount` and the `World` interpreter; nothing else
-changes. `mockModel` answers from a script, and the in-memory world serves
-files from a list, so the test touches neither network nor disk:
-
 ```haskell
+-- Same definition, same call. Only the mount arguments and the World
+-- interpreter changed: mockModel answers from a script, and the in-memory
+-- world serves files from a list. No network, no disk.
 reply <-
   runEff . fmap fst . runWorldMemoryWithFiles [("README.md", "hello")] $
     invoke
       (mount (mockModel [Right (textResp "a greeting")]) (tools [viewFileTool]) readerDef)
       "Summarize README.md."
 ```
-
-That swap is the point of the library. The rest of this README builds a
-two-agent workflow and introduces each part — definitions, tools, models,
-tests — in the order the code needs them.
 
 ## Define the agents
 
@@ -81,13 +66,9 @@ workflow researcher reviewer =
   invoke researcher "Read the main modules." >>= invoke reviewer
 ```
 
-An `AgentDef` is one agent's specification: its system prompt, how inputs
-become prompt text, and whether it answers with plain text or structured
-data. It names no model; `mount` attaches one at the edge.
-
 `Eff es` is an Effectful computation whose allowed effects are listed in
 `es`. A workflow is such a computation over the agents it receives as
-arguments — nothing more, so ordinary combinators apply. To research two
+arguments, nothing more, so ordinary combinators apply. To research two
 areas at once, replace the body with:
 
 ```haskell
@@ -99,9 +80,9 @@ invoke reviewer (overview <> "\n\n" <> tests)
 ```
 
 The two `invoke` calls run concurrently and share nothing: each starts from
-an empty conversation. `concurrently` needs raw `IO`, so the signature gains
-`IOE :> es` — read `:>` as "is available in". `IOE` is Effectful's effect
-for raw `IO`.
+an empty conversation. `concurrently` needs raw `IO` (Effectful's `IOE`
+effect), so the workflow's signature gains `IOE :> es`. Read `:>` as "is
+available in".
 
 ## Give each agent its tools
 
@@ -168,8 +149,13 @@ main :: IO ()
 main = do
   key <- T.pack <$> getEnv "DEEPSEEK_API_KEY"
   let runtime = model (deepSeekProvider key) "deepseek-v4-flash"
+      -- One runtime, mounted twice. Give the reviewer a different runtime
+      -- to mix models in one workflow.
       researcher = mount runtime researchTools researcherDef
+      -- No tools: the reviewer only reasons over the text it is given.
       reviewer = mount runtime noTools reviewerDef
+  -- runWorldLocal interprets World, discharging the constraint that
+  -- researchTools carried.
   report <- runEff . runWorldLocal "." $ workflow researcher reviewer
   TIO.putStrLn report
 ```
@@ -178,15 +164,6 @@ main = do
 and default parameters, as an ordinary value. Mount the same runtime on
 several agents, wrap it in middleware (below), or swap it for `mockModel` in
 tests.
-
-What each part does:
-
-- Each agent gets a model. `mount` is the only place a provider is named, so
-  giving the reviewer a different `runtime` mixes models in one workflow.
-- Each agent gets its own tools. The researcher reads the project; the
-  reviewer gets no tools and only reasons over text.
-- `runWorldLocal "."` interprets `World`, discharging the constraint the
-  toolset carried.
 
 ### Every path stays inside the root
 
@@ -215,10 +192,8 @@ report <-
       (mount (mockModel [Right (textResp "no unsupported claims")]) noTools reviewerDef)
 ```
 
-- Each script restarts for every invocation, so independent agent calls stay
-  deterministic.
-- Only the arguments to `mount` differ from production. The workflow under
-  test is the shipped code.
+Each script restarts for every invocation, so independent agent calls stay
+deterministic. The workflow under test is the shipped code.
 
 ### Record a session
 
@@ -228,17 +203,12 @@ and every recorded turn and tool call persists to that file.
 
 ### Replay a recording as a regression test
 
-A recording doubles as a regression test:
-
-- every recorded model turn and tool invocation plays back, in order
-- anything unrecorded raises `ReplayDivergence` instead of improvising
-- the stream is session-wide: both agents draw from one continuous recording
-- adding another `invoke` fails with that call named in the error, instead of
-  shifting every later answer
-
 ```haskell
 events <- runEff (resumeSession "session.jsonl")
 let script = extractReplayScript events
+-- The replay runtime and toolset play back recorded model turns and tool
+-- results, in order. Anything unrecorded raises ReplayDivergence instead
+-- of improvising.
 runtime <- strictReplayRuntime script
 replayResearchTools <- strictReplayToolset script researchTools
 report <-
@@ -247,6 +217,10 @@ report <-
       (mount runtime replayResearchTools researcherDef)
       (mount runtime noTools reviewerDef)
 ```
+
+The recording is session-wide: both agents draw from one continuous stream.
+Adding another `invoke` fails with that call named in the error, instead of
+shifting every later answer.
 
 ## Keep a conversation
 

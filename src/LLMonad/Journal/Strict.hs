@@ -22,15 +22,16 @@ module LLMonad.Journal.Strict (
     strictReplayToolset,
 ) where
 
-import Control.Exception qualified as CE
-import Data.Aeson (Value)
+import Control.Exception (throwIO)
+import Data.Aeson (Value, object, (.=))
 import Data.IORef
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.List (mapAccumL, nub)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Dynamic (EffectHandler, interpret)
-import Effectful.Exception qualified as EE
 import LLMonad.Core (LLM (..))
 import LLMonad.Error (LLMError (..))
 import LLMonad.Journal.Types hiding (ToolResult)
@@ -72,101 +73,128 @@ data ReplayScript = ReplayScript
     }
     deriving (Eq, Show)
 
-{- | Parse journal events into a 'ReplayScript'. Each 'ToolInvoked' pairs with
-the 'ToolCompleted' sharing its call id, wherever that completion appears;
-invocations without one carry no result.
+{- | Parse journal events into a 'ReplayScript'.
+
+Invocations pair with completions by call id, and the /n/th invocation of an
+id takes the /n/th completion for that id. Pairing on the id alone would be
+wrong for the ids this library itself writes: 'LLMonad.Journal.recordToolCall'
+(and the 'ToolInvokedSimple' pattern) use the tool name as the call id, so
+every invocation of one tool shares an id and would otherwise replay the
+first result forever. Providers that mint unique ids have one completion per
+id, where the two rules coincide. An invocation with no completion left to
+take carries no result.
 -}
 extractReplayScript :: [JournalEvent] -> ReplayScript
 extractReplayScript events =
     ReplayScript
         { scriptTurns = [RecordedTurn content calls | ModelTurn content calls <- events]
-        , scriptToolCalls = mapMaybe invoked events
+        , scriptToolCalls = catMaybes . snd $ mapAccumL takeResult completions events
         }
   where
-    results = [(cid, r) | ToolCompleted cid r <- events]
-    invoked (ToolInvoked cid name args) =
-        Just (RecordedToolCall cid name args (lookup cid results))
-    invoked _ = Nothing
+    -- Completions per id, oldest first: fromListWith prepends, so undo it once.
+    completions =
+        Map.map reverse . Map.fromListWith (++) $
+            [(callId, [result]) | ToolCompleted callId result <- events]
+
+    takeResult unclaimed (ToolInvoked callId name args) =
+        let (result, rest) = claimNext callId unclaimed
+         in (rest, Just (RecordedToolCall callId name args result))
+    takeResult unclaimed _ = (unclaimed, Nothing)
+
+    -- This invocation claims the oldest completion still unclaimed for its id.
+    claimNext callId unclaimed = case Map.lookup callId unclaimed of
+        Just (result : later) -> (Just result, Map.insert callId later unclaimed)
+        _ -> (Nothing, unclaimed)
+
+--------------------------------------------------------------------------------
+-- Model turns
+--------------------------------------------------------------------------------
+
+{- | How far into the recorded turns the session has read. The count keeps
+rising past the end so a divergence can name the ordinal of the call that
+actually ran off it, not just where the recording stopped.
+-}
+data TurnCursor = TurnCursor
+    { turnsTaken :: !Int
+    , turnsLeft :: [RecordedTurn]
+    }
 
 {- | A 'ModelRuntime' that answers model turns from a recording, in order.
 
 The recording does not store requests, so requests cannot be compared — what
 is verified is the shape of the conversation: how many turns happen and what
 each says and asks for. Any turn past the end of the recording raises
-@'ReplayDivergence'@ naming the first unrecorded ordinal.
+@'ReplayDivergence'@ naming that turn's ordinal.
 
-The stream is session-wide: it persists across every agent invocation sharing
-this runtime, so a workflow with several agents replays against one
-continuous recording instead of restarting it per call (the deliberate
-difference from 'mockModel', whose script restarts each invocation).
-Requires 'IOE' because construction allocates the cursor the invocations
-advance.
+Two pieces of state, deliberately scoped differently:
+
+* the position in the recording is session-wide, so a workflow with several
+  agents replays against one continuous recording instead of restarting it
+  per call (the deliberate difference from 'mockModel', whose script restarts
+  each invocation);
+* the conversation — history and system prompt — is per invocation, exactly
+  as 'LLMonad.Model.model' and 'mockModel' scope it. Sharing it would let
+  concurrent agents write into each other's conversations, which no other
+  runtime does.
+
+Requires 'IOE' because construction allocates the cursor invocations advance.
 -}
 strictReplayRuntime :: (IOE :> es) => ReplayScript -> IO (ModelRuntime es)
 strictReplayRuntime script = do
-    st <-
-        newIORef
-            ReplayState
-                { rpRemaining = modelScript script
-                , rpHistory = []
-                , rpSystem = Nothing
-                }
-    pure $ ModelRuntime{runModelRuntime = interpret (replayHandler script st)}
+    cursor <- newIORef (TurnCursor 0 (scriptTurns script))
+    pure $ ModelRuntime $ \action -> do
+        conversation <- liftIO (newIORef (Conversation [] Nothing))
+        interpret (replayHandler cursor conversation) action
 
-{- | The scripted answers plus nothing else: exhaustion is handled at pop time
-so the divergence can name where the recording ended.
--}
-modelScript :: ReplayScript -> [Either LLMError CompletionResponse]
-modelScript script =
-    map (Right . turnResponse) (scriptTurns script)
-
-data ReplayState = ReplayState
-    { rpRemaining :: [Either LLMError CompletionResponse]
-    , rpHistory :: [ChatMessage]
-    , rpSystem :: Maybe Text
+-- | One invocation's model session.
+data Conversation = Conversation
+    { convHistory :: [ChatMessage]
+    , convSystem :: Maybe Text
     }
 
-replayHandler :: forall es. (IOE :> es) => ReplayScript -> IORef ReplayState -> EffectHandler LLM es
-replayHandler script st _env = \case
-    GetHistory -> liftIO (rpHistory <$> readIORef st)
-    SetHistory msgs -> liftIO $ modifyIORef' st (\s -> s{rpHistory = msgs})
-    PushMessage msg ->
-        liftIO $ modifyIORef' st (\s -> s{rpHistory = rpHistory s ++ [msg]})
-    ClearHistory -> liftIO $ modifyIORef' st (\s -> s{rpHistory = []})
-    GetSystem -> liftIO (rpSystem <$> readIORef st)
-    SetSystem sys -> liftIO $ modifyIORef' st (\s -> s{rpSystem = Just sys})
-    ClearSystem -> liftIO $ modifyIORef' st (\s -> s{rpSystem = Nothing})
-    ChatRound{} -> do
-        resp <- popResponse
-        liftIO $ modifyIORef' st (\s -> s{rpHistory = rpHistory s ++ [assistantOf resp]})
-        pure resp
+replayHandler ::
+    forall es.
+    (IOE :> es) =>
+    IORef TurnCursor ->
+    IORef Conversation ->
+    EffectHandler LLM es
+replayHandler cursor conversation _env = \case
+    GetHistory -> liftIO (convHistory <$> readIORef conversation)
+    SetHistory msgs -> edit (\c -> c{convHistory = msgs})
+    PushMessage msg -> edit (append msg)
+    ClearHistory -> edit (\c -> c{convHistory = []})
+    GetSystem -> liftIO (convSystem <$> readIORef conversation)
+    SetSystem sys -> edit (\c -> c{convSystem = Just sys})
+    ClearSystem -> edit (\c -> c{convSystem = Nothing})
+    ChatRound{} -> answer
     StreamRound _ _ _ cb -> do
-        resp <- popResponse
-        liftIO $ do
-            modifyIORef' st (\s -> s{rpHistory = rpHistory s ++ [assistantOf resp]})
-            cb (SEText (crspText resp))
-            cb (SEFinished resp)
+        resp <- answer
+        liftIO (cb (SEText (crspText resp)) >> cb (SEFinished resp))
         pure resp
   where
-    -- Every answer comes off one cursor; an empty cursor means the workflow
-    -- made more model calls than the recording holds. All excess calls name
-    -- the first position past the recording, which is the truth for each of
-    -- them.
-    popResponse :: Eff es CompletionResponse
-    popResponse = do
-        popped <- liftIO $ atomicModifyIORef' st $ \s ->
-            case rpRemaining s of
-                [] -> (s, Nothing)
-                (r : rest) -> (s{rpRemaining = rest}, Just r)
-        case popped of
-            Just (Right resp) -> pure resp
-            Just (Left err) -> EE.throwIO err
-            Nothing ->
-                EE.throwIO . ReplayDivergence . unrecordedTurnMsg $
-                    length (scriptTurns script) + 1
+    edit f = liftIO (modifyIORef' conversation f)
+    append msg c = c{convHistory = convHistory c ++ [msg]}
 
-assistantOf :: CompletionResponse -> ChatMessage
-assistantOf resp = AssistantMsg (crspText resp) (crspToolCalls resp)
+    -- Take the next recorded turn and record its reply, exactly as the live
+    -- and mock interpreters do.
+    answer :: Eff es CompletionResponse
+    answer =
+        liftIO (takeTurn cursor) >>= \case
+            Left ordinal -> liftIO . throwIO . ReplayDivergence $ unrecordedTurnMsg ordinal
+            Right turn -> do
+                let resp = turnResponse turn
+                edit (append (AssistantMsg (crspText resp) (crspToolCalls resp)))
+                pure resp
+
+{- | Advance the session cursor: the next recorded turn, or the ordinal of the
+call that ran past the end of the recording.
+-}
+takeTurn :: IORef TurnCursor -> IO (Either Int RecordedTurn)
+takeTurn cursor = atomicModifyIORef' cursor $ \c ->
+    let taken = turnsTaken c + 1
+     in case turnsLeft c of
+            [] -> (c{turnsTaken = taken}, Left taken)
+            (turn : later) -> (TurnCursor taken later, Right turn)
 
 turnResponse :: RecordedTurn -> CompletionResponse
 turnResponse t =
@@ -178,9 +206,13 @@ turnResponse t =
         , crspUsage = Just (Usage 0 0)
         }
 
+--------------------------------------------------------------------------------
+-- Tool calls
+--------------------------------------------------------------------------------
+
 {- | Wrap a toolset so every invocation is answered from the recording instead
-of executed: same advertised specs, handlers replaced by a lookup against the
-recorded tool calls, consumed strictly in order.
+of executed: handlers are replaced by a lookup against the recorded tool
+calls, consumed strictly in order, and no handler ever runs.
 
 Each guard is one rule of the match:
 
@@ -193,31 +225,58 @@ Each guard is one rule of the match:
   recorded result returns a tool-error answer rather than diverging: the
   invocation itself was recorded, so there is nothing to fail on.
 
+A tool the recording invoked but this toolset no longer advertises is added
+back as a stub that diverges when called. Without it the agent loop answers
+its own @unknown tool@ error and the run finishes green, so deleting a tool
+the recording depended on would pass as a regression test. The stub only ever
+fires when a recorded turn asks this agent for that tool, so wrapping a
+toolset that never owned it stays harmless.
+
 Like 'strictReplayRuntime', the cursor is session-wide across all invocations
 sharing this toolset, and construction requires 'IOE'.
 -}
 strictReplayToolset :: (IOE :> es) => ReplayScript -> Toolset es -> IO (Toolset es)
-strictReplayToolset script ts0 = do
-    queue <- newIORef (scriptToolCalls script)
-    pure . tools $ map (replayed queue) (toolsetTools ts0)
+strictReplayToolset script toolset = do
+    cursor <- newIORef (scriptToolCalls script)
+    pure . tools $ map (replayed cursor) advertised ++ map absentStub absentees
   where
-    replayed queue t =
-        t{toolRun = liftIO . replayedRun queue (toolSpecName (toolSpec t))}
+    advertised = toolsetTools toolset
+    advertisedNames = map (toolSpecName . toolSpec) advertised
+    absentees =
+        nub [name | name <- map rtcName (scriptToolCalls script), name `notElem` advertisedNames]
+
+    replayed cursor t =
+        t{toolRun = liftIO . replayedRun cursor (toolSpecName (toolSpec t))}
+
+    absentStub name =
+        Tool
+            { toolSpec =
+                ToolSpec
+                    { toolSpecName = name
+                    , toolSpecDescription = "strict replay: recorded, but absent from this toolset"
+                    , toolSpecParameters = object ["type" .= ("object" :: Text), "properties" .= object []]
+                    }
+            , toolRun = \_args -> liftIO (throwIO (ReplayDivergence (absentToolMsg name)))
+            }
 
 replayedRun :: IORef [RecordedToolCall] -> Text -> Value -> IO ToolResult
-replayedRun queue name args = do
-    popped <- atomicModifyIORef' queue $ \case
+replayedRun cursor name args = do
+    expected <- atomicModifyIORef' cursor $ \case
         [] -> ([], Nothing)
         (e : rest) -> (rest, Just e)
-    case popped of
-        Nothing -> CE.throwIO (ReplayDivergence (unrecordedToolMsg name))
+    case expected of
+        Nothing -> throwIO (ReplayDivergence (unrecordedToolMsg name))
         Just e
             | rtcName e /= name ->
-                CE.throwIO (ReplayDivergence (toolOrderMsg (rtcName e) name))
+                throwIO (ReplayDivergence (toolOrderMsg (rtcName e) name))
             | args /= rtcArguments e ->
-                CE.throwIO (ReplayDivergence (argsDriftMsg name))
+                throwIO (ReplayDivergence (argsDriftMsg name))
             | otherwise ->
                 pure (fromMaybe (Left (noResultMsg (rtcCallId e))) (rtcResult e))
+
+--------------------------------------------------------------------------------
+-- Divergence messages
+--------------------------------------------------------------------------------
 
 unrecordedTurnMsg :: Int -> Text
 unrecordedTurnMsg n =
@@ -226,6 +285,10 @@ unrecordedTurnMsg n =
 unrecordedToolMsg :: Text -> Text
 unrecordedToolMsg name =
     "strict replay: tool '" <> name <> "' was not in the recording"
+
+absentToolMsg :: Text -> Text
+absentToolMsg name =
+    "strict replay: the recording called tool '" <> name <> "', which this toolset no longer has"
 
 toolOrderMsg :: Text -> Text -> Text
 toolOrderMsg expected actual =
