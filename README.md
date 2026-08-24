@@ -1,19 +1,16 @@
 # LLMonad
 
 LLMonad is an Effectful library for typed agents, tools, and workflows. A
-tool declares the effects it needs, those requirements stay in its type while
-it moves into toolsets and agents, and they discharge exactly once at the
-program edge, where an interpreter picks the semantics.
+tool declares the effects it needs in its own type; an interpreter at the
+program edge discharges them, once.
 
-- Run under `runWorldLocal "./workspace"` and every path a tool touches
-  resolves inside that root; anything else fails. Swap the interpreter and the
-  same agent runs against in-memory files or a throwaway Git worktree.
-- Testing is an argument swap: the same `mount` call that attaches a live
-  provider can attach a scripted model, so the workflow your tests exercise is
-  the workflow that ships, with no network and no disk.
-- Workflow code never names a provider, a model, or an HTTP detail. An
-  `AgentDef` says what an agent does, `mount` gives that definition a model
-  and a toolset, and workflows are plain functions taking configured agents.
+- `runWorldLocal "./workspace"` resolves every path a tool touches inside
+  that root and fails on anything else. Other interpreters serve files from
+  memory or run them in a throwaway Git worktree.
+- `mount` a scripted model instead of a live provider and the same workflow
+  runs in tests, with no network and no disk.
+- Workflow code never names a provider, a model, or an HTTP detail. Agents
+  are values; workflows are functions taking them.
 
 ## Define the agents
 
