@@ -606,10 +606,10 @@ spec = do
             parsePromptChunks "Empty #{   }" `shouldBe` Left "Empty variable interpolation in #{}"
             parsePromptChunks "Unclosed #{foo" `shouldBe` Left "Unclosed #{ in prompt template"
 
-    describe "Challenger Adversarial Suite: Curried ask / ask' & Composition" $ do
-        it "Executes 4-argument curried ask' and formats prompt correctly" $ do
+    describe "Challenger Adversarial Suite: Curried ask & Composition" $ do
+        it "Executes 4-argument curried ask and formats prompt correctly" $ do
             let fourArgs :: Text -> Text -> Text -> Text -> Eff '[LLM, IOE] Bool
-                fourArgs = ask' "Check four conditions"
+                fourArgs = ask "Check four conditions"
                 script = [Right (structuredResp (toJSON True))]
             (val, reqs) <- runEff (runLLMMock script (fourArgs "c1" "c2" "c3" "c4"))
             val `shouldBe` True
