@@ -12,7 +12,6 @@
 module LLMonad.API (
     AskFunction (..),
     ask,
-    ask',
 ) where
 
 import Data.Aeson (FromJSON)
@@ -38,7 +37,3 @@ instance (AskFunction es fn a) => AskFunction es (Text -> fn) a where
 -- | Curried ask combinator with return type as the first visible type application.
 ask :: forall a es fn. (AskFunction es fn a) => Text -> fn
 ask t = askApply @es @fn @a t []
-
--- | Curried ask' combinator for prompt templates with multiple parameters.
-ask' :: forall a es fn. (AskFunction es fn a) => Text -> fn
-ask' t = askApply @es @fn @a t []

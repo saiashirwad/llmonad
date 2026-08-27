@@ -1,5 +1,21 @@
 # Revision history for llmonad
 
+## Unreleased
+
+**Added**
+
+- Session recording that actually records: new `journaling` middleware
+  (`LLMonad.Middleware.Journaling`) turns every observed model round --
+  prompts, requested tool calls, tool results, model turns -- into `Journal`
+  events, and `withRecordedTurn` brackets one audit-valid turn, even when the
+  run aborts mid-flight. Until now, installing a journal interpreter around a
+  workflow wrote an empty file unless every event was hand-recorded.
+
+**Breaking**
+
+- `ask'` is removed as promised in 0.3.0.0: it had byte-identical behavior to
+  `ask`, so multi-parameter templates use `ask` directly.
+
 ## 0.3.0.0 -- 2026-08-24
 
 **Breaking**

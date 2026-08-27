@@ -43,6 +43,8 @@ module LLMonad (
     cached,
     traced,
     rateLimited,
+    journaling,
+    withRecordedTurn,
     withCache,
     withCacheModel,
     isCacheableResponse,
@@ -111,7 +113,6 @@ module LLMonad (
     -- * Curried Functional API
     AskFunction (..),
     ask,
-    ask',
 
     -- * Tools & Agent
     Tool (..),
@@ -225,6 +226,7 @@ import LLMonad.Journal.Memory
 import LLMonad.Journal.Strict
 import LLMonad.Middleware (Middleware (..))
 import LLMonad.Middleware.Cache
+import LLMonad.Middleware.Journaling
 import LLMonad.Middleware.RateLimit
 import LLMonad.Middleware.Trace
 import LLMonad.Model

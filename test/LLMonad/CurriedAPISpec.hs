@@ -78,10 +78,10 @@ spec = do
                 (s, _) <- runMock script (classifySentiment "I love this library!")
                 s `shouldBe` Positive
 
-        describe "2-argument curried ask'" $ do
+        describe "2-argument curried ask" $ do
             it "evaluates a 2-argument curried function returning a Bool" $ do
                 let compareDates :: Text -> Text -> Eff '[LLM, IOE] Bool
-                    compareDates = ask' "Is the first date before the second date?"
+                    compareDates = ask "Is the first date before the second date?"
                     script = [Right (structuredResp (toJSON True))]
                 (isBefore, reqs) <- runMock script (compareDates "2020-01-01" "2025-01-01")
                 isBefore `shouldBe` True
@@ -91,7 +91,7 @@ spec = do
 
             it "evaluates a 2-argument function returning a tuple" $ do
                 let pairSummary :: Text -> Text -> Eff '[LLM, IOE] (Int, Text)
-                    pairSummary = ask' "Extract pair"
+                    pairSummary = ask "Extract pair"
                     script = [Right (structuredResp (toJSON (10 :: Int, "ten" :: Text)))]
                 (res, _) <- runMock script (pairSummary "arg1" "arg2")
                 res `shouldBe` (10, "ten")

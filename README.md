@@ -198,8 +198,23 @@ deterministic. The workflow under test is the shipped code.
 ### Record a session
 
 `Journal` is LLMonad's session log effect: model turns and tool calls,
-recorded as they happen. Interpret it with `runJournalFile "session.jsonl"`
-and every recorded turn and tool call persists to that file.
+recorded as they happen. The `journaling` middleware observes an agent's
+model traffic; interpret the `Journal` effect with `runJournalFile
+"session.jsonl"` and every prompt, tool call, tool result, and model turn
+persists to that file:
+
+```haskell
+reply <-
+  runEff . runJournalFile "session.jsonl" . runWorldLocal "." $
+    withRecordedTurn "turn-1" $
+      invoke
+        (mount (applyMiddleware journaling runtime) (tools [viewFileTool]) readerDef)
+        "Summarize README.md."
+```
+
+`withRecordedTurn` brackets the turn, so even a run that dies mid-flight
+leaves an audit-valid session behind. `replayAudit events` verifies any such
+recording before you trust it as a replay fixture.
 
 ### Replay a recording as a regression test
 
@@ -219,8 +234,10 @@ report <-
 ```
 
 The recording is session-wide: both agents draw from one continuous stream.
-Adding another `invoke` fails with that call named in the error, instead of
-shifting every later answer.
+Adding another `invoke` past the recording raises `ReplayDivergence` naming
+the offending turn's ordinal — and tool drift (a different call next, or the
+same call with drifted arguments) names the tool — instead of shifting every
+later answer.
 
 ## Keep a conversation
 
