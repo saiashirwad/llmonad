@@ -192,6 +192,7 @@ module LLMonad (
     recordTurnStart,
     recordTurnFinish,
     runJournalFile,
+    runJournalFileTruncate,
     runJournalFileWithEvents,
     runJournalFileWorld,
     runJournalMemory,

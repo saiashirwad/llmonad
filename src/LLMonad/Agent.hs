@@ -65,8 +65,11 @@ data AgentOpts = AgentOpts
     , agentParams :: Params
     }
 
+{- | Sixteen rounds: live models legitimately spend 10-20 on multi-tool
+research before settling; eight exhausted them mid-investigation.
+-}
 defaultAgentOpts :: AgentOpts
-defaultAgentOpts = AgentOpts 8 defaultParams
+defaultAgentOpts = AgentOpts 16 defaultParams
 
 data AgentOutput output where
     TextOutput :: AgentOutput Text

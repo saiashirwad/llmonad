@@ -15,6 +15,9 @@
 
 - `ask'` is removed as promised in 0.3.0.0: it had byte-identical behavior to
   `ask`, so multi-parameter templates use `ask` directly.
+- `defaultAgentOpts` raises `agentMaxRounds` from 8 to 16: live multi-tool
+  research legitimately spends 10-20 rounds, and eight exhausted real runs
+  mid-investigation. Override with `withAgentOpts` where shorter caps matter.
 
 ## 0.3.0.0 -- 2026-08-24
 
@@ -58,6 +61,17 @@ A ground-up rebuild of the toy 0.1 prototype into a proper DSL.
 - A real test suite (schema derivation, SSE parsing, JSON extraction,
   request/response shapes, agent loop, retries) running against scripted
   mock providers — no network needed.
+
+**Added**
+
+- Glob support in SearchFiles include/exclude patterns: entries carrying
+  `*` or `?` anchor-match whole relative paths (so `*.hs` finally behaves),
+  while metachar-free entries keep substring semantics. Hidden-directory
+  skipping (`.git`, `dist-newstyle`, `.agents`) is now uniform across the
+  local and memory World backends via shared predicates in
+  `LLMonad.World.Match`.
+- `runJournalFileTruncate`: per-run capture on append-only journal files --
+  truncates at startup so the returned events contain exactly this run.
 
 **Changed**
 
