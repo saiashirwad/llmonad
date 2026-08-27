@@ -58,7 +58,7 @@ runJournalFile fp action = do
                         Right evs -> pure evs
             else pure []
     eventsRef <- liftIO $ newIORef (reverse initialEvents)
-    interpret (fileJournalHandler fp eventsRef) action
+    interpret_ (fileJournalHandler fp eventsRef) action
 
 -- | Run file journal interpreter and return both the computation result and the final list of events.
 runJournalFileWithEvents ::
@@ -75,8 +75,8 @@ fileJournalHandler ::
     (IOE :> es) =>
     FilePath ->
     IORef [JournalEvent] ->
-    EffectHandler Journal es
-fileJournalHandler fp eventsRef _ = \case
+    EffectHandler_ Journal es
+fileJournalHandler fp eventsRef = \case
     RecordEvent ev -> liftIO $ do
         let lineBytes = LBS.toStrict (Aeson.encode ev)
         IO.withFile fp IO.AppendMode $ \h -> do
