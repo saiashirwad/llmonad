@@ -39,6 +39,8 @@ module LLMonad.Types (
 import Control.Applicative ((<|>))
 import Data.Aeson (FromJSON (..), ToJSON (..), Value, (.:?), (.=))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.Key (Key)
+import Data.Aeson.Types (Parser)
 import Data.String (IsString)
 import Data.Text (Text)
 import GHC.Generics (Generic)
@@ -70,30 +72,19 @@ instance ToJSON ToolCall where
             , "arguments" .= args
             ]
 
+-- | Read @key@ then its aliases; when none are present yield 'dflt'.
+firstAlias :: (FromJSON v) => Aeson.Object -> v -> [Key] -> Parser v
+firstAlias _ dflt [] = pure dflt
+firstAlias o dflt (k : ks) = o .:? k >>= maybe (firstAlias o dflt ks) pure
+
 instance FromJSON ToolCall where
-    parseJSON = Aeson.withObject "ToolCall" $ \o -> do
-        cid <-
-            o .:? "id" >>= \case
-                Just i -> pure i
-                Nothing ->
-                    o .:? "toolCallId" >>= \case
-                        Just i -> pure i
-                        Nothing -> pure ""
-        name <-
-            o .:? "name" >>= \case
-                Just n -> pure n
-                Nothing ->
-                    o .:? "toolName" >>= \case
-                        Just n -> pure n
-                        Nothing -> pure ""
-        args <-
-            o .:? "arguments" >>= \case
-                Just a -> pure a
-                Nothing ->
-                    o .:? "args" >>= \case
-                        Just a -> pure a
-                        Nothing -> pure Aeson.Null
-        pure (ToolCall cid name args)
+    parseJSON = Aeson.withObject "ToolCall" $ \o ->
+        ToolCall
+            -- Providers disagree on tool-call field spellings, so each field
+            -- walks its aliases in preference order.
+            <$> firstAlias o "" ["id", "toolCallId"]
+            <*> firstAlias o "" ["name", "toolName"]
+            <*> firstAlias o Aeson.Null ["arguments", "args"]
 
 {- | A single message in a conversation, covering every role and the
 tool-calling shapes of both supported protocols.
@@ -214,7 +205,7 @@ data CompletionResponse = CompletionResponse
     , crspStructuredPayload :: Maybe Value
     {- ^ Structured output delivered out-of-band (e.g. Anthropic returns
     the JSON inside a forced @tool_use@ block). When present,
-    'LLMonad.Core.ask' decodes this directly instead of parsing
+    'LLMonad.API.ask' decodes this directly instead of parsing
     'crspText'.
     -}
     , crspFinishReason :: FinishReason

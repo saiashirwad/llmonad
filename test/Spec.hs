@@ -24,6 +24,7 @@ import LLMonad.E2ETier4Spec qualified
 import LLMonad.ExtractSpec qualified
 import LLMonad.FinalChallengeSpec qualified
 import LLMonad.HttpSpec qualified
+import LLMonad.JournalAutoRecordSpec qualified
 import LLMonad.JournalSpec qualified
 import LLMonad.MockSpec qualified
 import LLMonad.OpenAICompatSpec qualified
@@ -36,6 +37,7 @@ import LLMonad.StrictReplaySpec qualified
 import LLMonad.StructuredSpec qualified
 import LLMonad.THSpec qualified
 import LLMonad.WorldAdversarialSpec qualified
+import LLMonad.WorldMatchSpec qualified
 import LLMonad.WorldSpec qualified
 import Test.Hspec
 
@@ -59,9 +61,11 @@ main = hspec $ do
     describe "Tier 3: Pairwise Interactions" LLMonad.E2ETier3Spec.spec
     describe "Tier 4: Real-World Workloads" LLMonad.E2ETier4Spec.spec
     describe "Challenger Adversarial Stress Tests (M1)" LLMonad.ChallengerSpec.spec
+    describe "Shared World Matching & Backend Parity (R1)" LLMonad.WorldMatchSpec.spec
     describe "World Effect & Sandboxing (R1)" LLMonad.WorldSpec.spec
     describe "World Effect Adversarial Stress Tests (R1)" LLMonad.WorldAdversarialSpec.spec
     describe "Journal Effect & Persistence (R2)" LLMonad.JournalSpec.spec
+    describe "Automatic Session Recording (R2)" LLMonad.JournalAutoRecordSpec.spec
     describe "Journal Replay & Deserialization Fidelity (Batch 5 / R5)" LLMonad.ReplaySpec.spec
     describe "Strict Replay Divergence" LLMonad.StrictReplaySpec.spec
     describe "Standard Coding Tools (R3)" LLMonad.CodingToolsSpec.spec

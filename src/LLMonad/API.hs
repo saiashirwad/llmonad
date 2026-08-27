@@ -12,7 +12,6 @@
 module LLMonad.API (
     AskFunction (..),
     ask,
-    ask',
 ) where
 
 import Data.Aeson (FromJSON)
@@ -27,7 +26,7 @@ import LLMonad.Structured (askStructured)
 class AskFunction es fn a | fn -> es a where
     askApply :: Text -> [Text] -> fn
 
-instance (LLM :> es, FromJSON a, ToSchema a) => AskFunction es (Eff es a) a where
+instance (IOE :> es, LLM :> es, FromJSON a, ToSchema a) => AskFunction es (Eff es a) a where
     askApply t args =
         let fullPrompt = if null args then t else t <> ":\n" <> T.unwords args
          in askStructured fullPrompt
@@ -38,7 +37,3 @@ instance (AskFunction es fn a) => AskFunction es (Text -> fn) a where
 -- | Curried ask combinator with return type as the first visible type application.
 ask :: forall a es fn. (AskFunction es fn a) => Text -> fn
 ask t = askApply @es @fn @a t []
-
--- | Curried ask' combinator for prompt templates with multiple parameters.
-ask' :: forall a es fn. (AskFunction es fn a) => Text -> fn
-ask' t = askApply @es @fn @a t []

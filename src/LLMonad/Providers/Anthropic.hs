@@ -111,9 +111,7 @@ messagesUrl cfg =
 
 authHeaders :: AnthropicConfig -> [(Text, Text)]
 authHeaders cfg =
-    [("x-api-key", acApiKey cfg), ("anthropic-version", acVersion cfg)] ++ ocExtra
-  where
-    ocExtra = acExtraHeaders cfg
+    [("x-api-key", acApiKey cfg), ("anthropic-version", acVersion cfg)] ++ acExtraHeaders cfg
 
 structuredToolName :: Text
 structuredToolName = "__llmonad_structured_output"

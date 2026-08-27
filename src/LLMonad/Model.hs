@@ -36,5 +36,5 @@ modelWithConfig config = ModelRuntime (runLLMHTTP config)
 {- | Configure a deterministic model script. The script restarts for each
 invocation, which keeps independent agent calls deterministic.
 -}
-mockModel :: [Either LLMError CompletionResponse] -> ModelRuntime es
+mockModel :: (IOE :> es) => [Either LLMError CompletionResponse] -> ModelRuntime es
 mockModel script = ModelRuntime (fmap fst . runLLMMock script)

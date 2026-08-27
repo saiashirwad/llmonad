@@ -60,6 +60,7 @@ library
         LLMonad.Interpreter.HTTP
         LLMonad.Interpreter.Mock
         LLMonad.Middleware
+        LLMonad.Middleware.Journaling
         LLMonad.Middleware.Cache
         LLMonad.Middleware.Trace
         LLMonad.Middleware.RateLimit
@@ -75,6 +76,7 @@ library
         LLMonad.Workflow
         LLMonad.World
         LLMonad.World.Types
+        LLMonad.World.Match
         LLMonad.World.Local
         LLMonad.World.Worktree
         LLMonad.World.Memory
@@ -174,9 +176,9 @@ test-suite llmonad-test
         LLMonad.E2ETier3Spec
         LLMonad.E2ETier4Spec
         LLMonad.ChallengerSpec
-        LLMonad.WorldSpec
         LLMonad.WorldAdversarialSpec
         LLMonad.JournalSpec
+        LLMonad.JournalAutoRecordSpec
         LLMonad.StrictReplaySpec
         LLMonad.ReplaySpec
         LLMonad.CodingToolsSpec

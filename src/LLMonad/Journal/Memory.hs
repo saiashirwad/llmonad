@@ -34,7 +34,7 @@ runJournalMemoryWithState ::
     JournalState ->
     Eff (Journal : es) a ->
     Eff es (a, JournalState)
-runJournalMemoryWithState st = reinterpret (runState st) memoryJournalHandler
+runJournalMemoryWithState st = reinterpret_ (runState st) memoryJournalHandler
 
 -- | Simplified in-memory interpreter that discards accumulated journal events on completion.
 runJournalMemorySimple ::
@@ -45,8 +45,8 @@ runJournalMemorySimple action = do
     pure res
 
 -- | Dynamic handler for the 'Journal' effect implemented via local static State.
-memoryJournalHandler :: EffectHandler Journal (State JournalState : es)
-memoryJournalHandler _ = \case
+memoryJournalHandler :: EffectHandler_ Journal (State JournalState : es)
+memoryJournalHandler = \case
     RecordEvent ev ->
         modify (\s -> s{jsEvents = jsEvents s ++ [ev]})
     GetEvents ->

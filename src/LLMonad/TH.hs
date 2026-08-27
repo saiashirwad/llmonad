@@ -13,52 +13,49 @@ import LLMonad.TH.QuasiQuoter (prompt)
 import LLMonad.Tools (mkTool, toolSync)
 import Language.Haskell.TH
 
--- | Automatically create a Tool from a function name.
+-- | Automatically create a 'Tool' whose spec name comes from the function name.
 makeTool :: Name -> Q Exp
-makeTool name = makeToolNamed (T.pack (nameBase name)) name
+makeTool = makeToolWorker "makeTool" Nothing
 
--- | Automatically create a named Tool from a function name.
+{- | Automatically create a 'Tool' under an explicit name, overriding the
+function-name-derived default.
+-}
 makeToolNamed :: Text -> Name -> Q Exp
-makeToolNamed toolName name = do
+makeToolNamed toolName = makeToolWorker "makeToolNamed" (Just toolName)
+
+makeToolWorker :: String -> Maybe Text -> Name -> Q Exp
+makeToolWorker api toolNameOverride name = do
     info <- reify name
     case info of
-        VarI _ typ _ -> generateToolExp toolName name typ
-        _ -> fail ("makeTool: Expected a function variable name, got: " ++ show name)
+        VarI _ typ _ ->
+            generateToolExp api (maybe (T.pack (nameBase name)) id toolNameOverride) name typ
+        _ -> fail (api ++ ": Expected a function variable name, got: " ++ show name)
 
--- | Inspect function type and generate the Tool splice.
-generateToolExp :: Text -> Name -> Type -> Q Exp
-generateToolExp toolName name typ = do
+{- | Inspect the function type and generate the 'Tool' splice.
+
+Each supported arity maps to exactly one argument adapter: zero arguments
+bind a unit, one argument passes through, and two to four arguments uncurry
+from a fresh-binder tuple. IO-typed functions wrap in 'mkTool', pure ones
+in 'toolSync'.
+-}
+generateToolExp :: String -> Text -> Name -> Type -> Q Exp
+generateToolExp api toolName name typ = do
     let unrolled = unrollType typ
-        retType = last unrolled
         argCount = length unrolled - 1
+        retType = last unrolled
         isIO = case retType of
             AppT (ConT io) _ -> io == ''IO
             _ -> False
-        toolNameStr = T.unpack toolName
-        descStr = "Execute " ++ nameBase name
-    case argCount of
-        0 ->
-            if isIO
-                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(() :: ()) -> $(varE name))|]
-                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(() :: ()) -> $(varE name))|]
-        1 ->
-            if isIO
-                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) $(varE name)|]
-                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) $(varE name)|]
-        2 ->
-            if isIO
-                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (uncurry $(varE name))|]
-                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (uncurry $(varE name))|]
-        3 ->
-            if isIO
-                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b, c) -> $(varE name) a b c)|]
-                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b, c) -> $(varE name) a b c)|]
-        4 ->
-            if isIO
-                then [|mkTool (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b, c, d) -> $(varE name) a b c d)|]
-                else [|toolSync (T.pack $(stringE toolNameStr)) (T.pack $(stringE descStr)) (\(a, b, c, d) -> $(varE name) a b c d)|]
-        _ ->
-            fail ("makeTool: Functions with " ++ show argCount ++ " arguments are not supported (max 4)")
+        ctor = if isIO then [|mkTool|] else [|toolSync|]
+    adapter <- case argCount of
+        0 -> [|\(() :: ()) -> $(varE name)|]
+        1 -> varE name
+        n
+            | n <= 4 -> do
+                vars <- mapM (newName . (: [])) (take n ['a' ..])
+                lamE [tupP (map varP vars)] $ foldl appE (varE name) (map varE vars)
+        _ -> fail (api ++ ": Functions with " ++ show argCount ++ " arguments are not supported (max 4)")
+    [|$ctor (T.pack $(stringE (T.unpack toolName))) (T.pack $(stringE ("Execute " ++ nameBase name))) $(pure adapter)|]
 
 -- | Unroll arrows from a function type into a list of argument and return types.
 unrollType :: Type -> [Type]

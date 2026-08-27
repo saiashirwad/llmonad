@@ -187,6 +187,9 @@ instance FromJSON JournalEvent where
                                     o .:? "toolName" >>= \case
                                         Just tn -> pure tn
                                         Nothing -> pure ""
+                -- Results serialize as tagged Left/Right objects; journals written
+                -- before tagging existed stored bare payloads, so an untagged value
+                -- falls through and is recovered wrapped in 'Right'.
                 res <- (o .: "result") <|> (Right <$> o .: "result")
                 pure (ToolCompleted callId res)
             "MetricsReported" -> MetricsReported <$> o .: "metrics"

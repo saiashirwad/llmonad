@@ -17,8 +17,8 @@ module LLMonad.World.Memory (
     defaultCommandHandlers,
 ) where
 
-import Control.Exception (throw)
-import Data.List (isPrefixOf, nub, sort, tails)
+import Control.Exception qualified as E
+import Data.List (isPrefixOf, nub, sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -27,32 +27,38 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.State.Static.Local
 import LLMonad.World (World (..))
+import LLMonad.World.Match (matchLine, matchesPathFilters, pathHasSkippedDir)
 import LLMonad.World.Types
 import System.FilePath (makeRelative, normalise, takeDirectory, (</>))
 
 -- | Run World effect purely in memory using provided state.
 runWorldMemory ::
+    (IOE :> es) =>
     MemoryWorldState ->
     Eff (World : es) a ->
     Eff es (a, MemoryWorldState)
 runWorldMemory st action = do
-    reinterpret (runState st) memoryWorldHandler action
+    reinterpret_ (runState st) memoryWorldHandler action
 
 -- | Simplified in-memory interpreter starting from empty state.
-runWorldMemorySimple :: Eff (World : es) a -> Eff es a
+runWorldMemorySimple :: (IOE :> es) => Eff (World : es) a -> Eff es a
 runWorldMemorySimple action = do
     (res, _) <- runWorldMemory (initMemoryWorld []) action
     pure res
 
 -- | Run in-memory interpreter initialized with a list of file paths and contents.
 runWorldMemoryWithFiles ::
+    (IOE :> es) =>
     [(FilePath, Text)] ->
     Eff (World : es) a ->
     Eff es (a, MemoryWorldState)
 runWorldMemoryWithFiles files = runWorldMemory (initMemoryWorld files)
 
-memoryWorldHandler :: EffectHandler World (State MemoryWorldState : es)
-memoryWorldHandler _ = \case
+{- | Lookup failures raise eagerly at the operation, never lazily when the
+caller forces the result.
+-}
+memoryWorldHandler :: (IOE :> es) => EffectHandler_ World (State MemoryWorldState : es)
+memoryWorldHandler = \case
     ReadFileText fp -> do
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
@@ -60,16 +66,16 @@ memoryWorldHandler _ = \case
             Just content -> pure content
             Nothing ->
                 if isMemDir (mwsFiles st) key
-                    then throw (WorldIsADirectory fp)
-                    else throw (WorldFileNotFound fp)
+                    then liftIO (E.throwIO (WorldIsADirectory fp))
+                    else liftIO (E.throwIO (WorldFileNotFound fp))
     ReadFileSlice fp mStart mEnd -> do
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
         case Map.lookup key (mwsFiles st) of
             Nothing ->
                 if isMemDir (mwsFiles st) key
-                    then throw (WorldIsADirectory fp)
-                    else throw (WorldFileNotFound fp)
+                    then liftIO (E.throwIO (WorldIsADirectory fp))
+                    else liftIO (E.throwIO (WorldFileNotFound fp))
             Just content -> do
                 let allLines = T.lines content
                 let total = length allLines
@@ -81,13 +87,13 @@ memoryWorldHandler _ = \case
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
         if isMemDir (mwsFiles st) key
-            then throw (WorldIsADirectory fp)
+            then liftIO (E.throwIO (WorldIsADirectory fp))
             else modify (\s -> s{mwsFiles = Map.insert key content (mwsFiles s)})
     DeleteFile fp -> do
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
         case Map.lookup key (mwsFiles st) of
-            Nothing -> throw (WorldFileNotFound fp)
+            Nothing -> liftIO (E.throwIO (WorldFileNotFound fp))
             Just _ -> modify (\s -> s{mwsFiles = Map.delete key (mwsFiles s)})
     CreateDirectory _ _ ->
         pure ()
@@ -95,7 +101,7 @@ memoryWorldHandler _ = \case
         st <- get
         let prefix = canonicalMemKey (mwsWorkingDir st) fp
         if not (isMemDir (mwsFiles st) prefix)
-            then throw (WorldDirectoryNotFound fp)
+            then liftIO (E.throwIO (WorldDirectoryNotFound fp))
             else do
                 let files = Map.keys (mwsFiles st)
                 let childEntries = getChildEntries prefix files
@@ -104,7 +110,7 @@ memoryWorldHandler _ = \case
         st <- get
         let searchPrefix = canonicalMemKey (mwsWorkingDir st) (soSearchDir opts)
         if not (isMemDir (mwsFiles st) searchPrefix)
-            then throw (WorldDirectoryNotFound (soSearchDir opts))
+            then liftIO (E.throwIO (WorldDirectoryNotFound (soSearchDir opts)))
             else do
                 let query = soQuery opts
                 let isCaseInsensitive = soCaseInsensitive opts
@@ -116,12 +122,10 @@ memoryWorldHandler _ = \case
                 let allFiles = Map.toList (mwsFiles st)
                 let inDir (k, _) = null searchPrefix || (searchPrefix ++ "/") `isPrefixOf` k || searchPrefix == k
 
-                let filterPatterns (k, _) =
-                        let hasInc = null includes || any (`T.isInfixOf` T.pack k) includes
-                            hasExc = not (null excludes) && any (`T.isInfixOf` T.pack k) excludes
-                         in hasInc && not hasExc
-
-                let targetFiles = filter (\item -> inDir item && filterPatterns item) allFiles
+                let targetFiles =
+                        filter
+                            (\item@(k, _) -> inDir item && not (pathHasSkippedDir k) && matchesPathFilters includes excludes (T.pack k))
+                            allFiles
 
                 let matches =
                         concatMap
@@ -129,7 +133,7 @@ memoryWorldHandler _ = \case
                                 let fileLines = zip [1 ..] (T.lines content)
                                  in [ SearchMatch path lineNum lineText
                                     | (lineNum, lineText) <- fileLines
-                                    , matchLineMem query isCaseInsensitive isRegex lineText
+                                    , matchLine query isCaseInsensitive isRegex lineText
                                     ]
                             )
                             targetFiles
@@ -139,14 +143,17 @@ memoryWorldHandler _ = \case
         st <- get
         let searchPrefix = canonicalMemKey (mwsWorkingDir st) (foSearchDir opts)
         if not (isMemDir (mwsFiles st) searchPrefix)
-            then throw (WorldDirectoryNotFound (foSearchDir opts))
+            then liftIO (E.throwIO (WorldDirectoryNotFound (foSearchDir opts)))
             else do
                 let pat = foPattern opts
                 let ftype = foTypeFilter opts
                 let excludes = foExcludes opts
                 let maxDepth = foMaxDepth opts
 
-                let allEntries = getAllMemEntries searchPrefix (Map.keys (mwsFiles st))
+                let allEntries =
+                        getAllMemEntries
+                            searchPrefix
+                            (filter (not . pathHasSkippedDir) (Map.keys (mwsFiles st)))
                 let keepEntry (path, isDir, depth) =
                         let name = T.pack (makeRelative (takeDirectory path) path)
                             typeOk = case ftype of
@@ -204,8 +211,13 @@ getChildEntries :: FilePath -> [FilePath] -> [DirEntry]
 getChildEntries dirPrefix allFiles =
     let relevantFiles =
             if null dirPrefix
-                then allFiles
-                else [drop (length dirPrefix + 1) f | f <- allFiles, (dirPrefix ++ "/") `isPrefixOf` f]
+                then filter (not . pathHasSkippedDir) allFiles
+                else
+                    [ drop (length dirPrefix + 1) f
+                    | f <- allFiles
+                    , (dirPrefix ++ "/") `isPrefixOf` f
+                    , not (pathHasSkippedDir (drop (length dirPrefix + 1) f))
+                    ]
         firstSegments = [takeWhile (/= '/') f | f <- relevantFiles, not (null f)]
         uniqueNames = sort (nub firstSegments)
      in [ DirEntry
@@ -238,28 +250,6 @@ getAllMemEntries prefix allFiles =
 
 pathDepth :: FilePath -> Int
 pathDepth p = length (filter (== '/') (normalise p))
-
-matchLineMem :: Text -> Bool -> Bool -> Text -> Bool
-matchLineMem query isCaseInsensitive isRegex line =
-    let q = if isCaseInsensitive then T.toLower query else query
-        l = if isCaseInsensitive then T.toLower line else line
-     in if isRegex
-            then simpleGlobMatch (T.unpack q) (T.unpack l)
-            else q `T.isInfixOf` l
-
--- | Wildcard glob matching supporting '*' wildcards anywhere in the line.
-simpleGlobMatch :: String -> String -> Bool
-simpleGlobMatch pat str = any (globMatch pat) (tails str)
-  where
-    globMatch "" _ = True
-    globMatch ('*' : ps) s =
-        globMatch ps s || case s of
-            "" -> False
-            (_ : rest) -> globMatch ('*' : ps) rest
-    globMatch (p : ps) (s : rest)
-        | p == s = globMatch ps rest
-        | otherwise = False
-    globMatch _ _ = False
 
 -- | Simulate default command executions.
 simulateCommand :: CommandSpec -> MemoryWorldState -> ProcessResult
