@@ -20,7 +20,7 @@ module LLMonad.World.Local (
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (cancel, wait, withAsync)
 import Control.Exception qualified as E
-import Control.Monad (forM, when)
+import Control.Monad (forM)
 import Data.Bifunctor (bimap)
 import Data.List (isPrefixOf, sort, tails)
 import Data.Text (Text)
@@ -454,7 +454,6 @@ collectFindEntries :: FilePath -> FilePath -> Maybe Int -> IO [(FilePath, Bool)]
 collectFindEntries canonicalRoot root maxDepth = go root 0
   where
     go currentDir currentDepth = do
-        when (maybe False (currentDepth >) maxDepth) $ pure ()
         names <- SD.listDirectory currentDir
         let filtered = filter (\n -> not (n == ".git" || n == "dist-newstyle" || n == ".agents")) names
         results <- forM filtered $ \name -> do

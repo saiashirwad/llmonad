@@ -608,10 +608,10 @@ spec = do
 
     describe "Challenger Adversarial Suite: Curried ask / ask' & Composition" $ do
         it "Executes 4-argument curried ask' and formats prompt correctly" $ do
-            let fourArgs :: Text -> Text -> Text -> Text -> Eff '[LLM] Bool
+            let fourArgs :: Text -> Text -> Text -> Text -> Eff '[LLM, IOE] Bool
                 fourArgs = ask' "Check four conditions"
                 script = [Right (structuredResp (toJSON True))]
-            (val, reqs) <- pure $ runPureEff (runLLMMock script (fourArgs "c1" "c2" "c3" "c4"))
+            (val, reqs) <- runEff (runLLMMock script (fourArgs "c1" "c2" "c3" "c4"))
             val `shouldBe` True
             case reqs of
                 (req : _) -> crMessages req `shouldBe` [UserMsg "Check four conditions:\nc1 c2 c3 c4"]
@@ -623,15 +623,15 @@ spec = do
                     , Right (structuredResp (toJSON (100 :: Int)))
                     , Right (structuredResp (toJSON False))
                     ]
-                askText :: Text -> Eff '[LLM] Text
+                askText :: Text -> Eff '[LLM, IOE] Text
                 askText = ask "Get text"
-                askInt :: Text -> Eff '[LLM] Int
+                askInt :: Text -> Eff '[LLM, IOE] Int
                 askInt = ask "Get int"
-                askBool :: Text -> Eff '[LLM] Bool
+                askBool :: Text -> Eff '[LLM, IOE] Bool
                 askBool = ask "Get bool"
-                action :: Eff '[LLM] (Text, Int, Bool)
+                action :: Eff '[LLM, IOE] (Text, Int, Bool)
                 action = (,,) <$> askText "in1" <*> askInt "in2" <*> askBool "in3"
-            ((t, i, b), reqs) <- pure $ runPureEff (runLLMMock script action)
+            ((t, i, b), reqs) <- runEff (runLLMMock script action)
             t `shouldBe` "First"
             i `shouldBe` 100
             b `shouldBe` False
@@ -639,9 +639,9 @@ spec = do
 
         it "Throws DecodeError when ask receives malformed structured output" $ do
             let script = [Right (textResp "Not valid JSON for ServerConfig")]
-                askConfig :: Text -> Eff '[LLM] ServerConfig
+                askConfig :: Text -> Eff '[LLM, IOE] ServerConfig
                 askConfig = ask "Extract server config"
-            res <- try (evaluate (runPureEff (runLLMMock script (askConfig "host: localhost"))))
+            res <- try (runEff (runLLMMock script (askConfig "host: localhost")))
             case res of
                 Left (DecodeError _ _) -> pure ()
                 Left other -> expectationFailure ("Expected DecodeError, got: " <> show other)
