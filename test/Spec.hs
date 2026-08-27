@@ -37,6 +37,7 @@ import LLMonad.StrictReplaySpec qualified
 import LLMonad.StructuredSpec qualified
 import LLMonad.THSpec qualified
 import LLMonad.WorldAdversarialSpec qualified
+import LLMonad.WorldMatchSpec qualified
 import LLMonad.WorldSpec qualified
 import Test.Hspec
 
@@ -60,6 +61,7 @@ main = hspec $ do
     describe "Tier 3: Pairwise Interactions" LLMonad.E2ETier3Spec.spec
     describe "Tier 4: Real-World Workloads" LLMonad.E2ETier4Spec.spec
     describe "Challenger Adversarial Stress Tests (M1)" LLMonad.ChallengerSpec.spec
+    describe "Shared World Matching & Backend Parity (R1)" LLMonad.WorldMatchSpec.spec
     describe "World Effect & Sandboxing (R1)" LLMonad.WorldSpec.spec
     describe "World Effect Adversarial Stress Tests (R1)" LLMonad.WorldAdversarialSpec.spec
     describe "Journal Effect & Persistence (R2)" LLMonad.JournalSpec.spec

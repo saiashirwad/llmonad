@@ -9,16 +9,16 @@ import Control.Concurrent.Async (forConcurrently_)
 import Control.Monad (forM_)
 import Data.Aeson (decode, encode)
 import Data.List (sort)
-import Data.Map.Strict qualified as Map
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
-import Data.Text qualified as T
+import qualified Data.Text as T
 import Effectful
-import Effectful.Exception qualified as EE
+import qualified Effectful.Exception as EE
 import LLMonad.World
 import LLMonad.World.Local
 import LLMonad.World.Memory
 import LLMonad.World.Worktree
-import System.Directory qualified as SD
+import qualified System.Directory as SD
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (readProcessWithExitCode)

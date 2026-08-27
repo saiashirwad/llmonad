@@ -176,7 +176,6 @@ test-suite llmonad-test
         LLMonad.E2ETier3Spec
         LLMonad.E2ETier4Spec
         LLMonad.ChallengerSpec
-        LLMonad.WorldSpec
         LLMonad.WorldAdversarialSpec
         LLMonad.JournalSpec
         LLMonad.JournalAutoRecordSpec
