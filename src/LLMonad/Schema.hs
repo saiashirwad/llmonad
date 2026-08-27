@@ -11,7 +11,7 @@
 {- | Derive real JSON Schema documents from ordinary Haskell types.
 
 'ToSchema' is to structured LLM output what aeson's 'Data.Aeson.FromJSON'
-is to parsing: derive both, and @'LLMonad.Core.ask' \@MyType "..."@ hands
+is to parsing: derive both, and @'LLMonad.API.ask' \@MyType "..."@ hands
 you back a decoded @MyType@ with the schema enforced server-side where
 possible.
 

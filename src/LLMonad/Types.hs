@@ -205,7 +205,7 @@ data CompletionResponse = CompletionResponse
     , crspStructuredPayload :: Maybe Value
     {- ^ Structured output delivered out-of-band (e.g. Anthropic returns
     the JSON inside a forced @tool_use@ block). When present,
-    'LLMonad.Core.ask' decodes this directly instead of parsing
+    'LLMonad.API.ask' decodes this directly instead of parsing
     'crspText'.
     -}
     , crspFinishReason :: FinishReason

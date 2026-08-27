@@ -141,7 +141,7 @@ spec = describe "Batch 4 Adversarial & Security Suite" $ do
         it "respects explicit timeoutMs override in runRunCommand" $ do
             let st = initMemoryWorld []
             (res, finalSt) <- runEff $ runWorldMemory st $ do
-                runRunCommand (RunCommandArgs "echo fast" Nothing (Just 1500) Nothing Nothing)
+                runRunCommand (RunCommandArgs "echo fast" Nothing (Just 1500))
             case res of
                 Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
                 Right (CommandCompleted code _ _ _) -> do
@@ -197,7 +197,7 @@ spec = describe "Batch 4 Adversarial & Security Suite" $ do
         it "applies default 30,000ms bounded timeout in runRunCommand when timeoutMs is Nothing" $ do
             let st = initMemoryWorld []
             (res, finalSt) <- runEff $ runWorldMemory st $ do
-                runRunCommand (RunCommandArgs "echo bounded" Nothing Nothing Nothing Nothing)
+                runRunCommand (RunCommandArgs "echo bounded" Nothing Nothing)
             case res of
                 Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
                 Right (CommandCompleted code stdout _ _) -> do

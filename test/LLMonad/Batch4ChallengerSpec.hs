@@ -251,7 +251,7 @@ spec = describe "Batch 4 Empirical Challenger Suite" $ do
         it "applies default bounded timeout of 30,000ms in runRunCommand" $ do
             let st = initMemoryWorld []
             (res, finalSt) <- runEff $ runWorldMemory st $ do
-                runRunCommand (RunCommandArgs "echo ok" Nothing Nothing Nothing Nothing)
+                runRunCommand (RunCommandArgs "echo ok" Nothing Nothing)
             case res of
                 Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
                 Right (CommandCompleted code stdout _ _) -> do

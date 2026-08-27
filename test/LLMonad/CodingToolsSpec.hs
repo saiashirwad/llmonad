@@ -394,7 +394,7 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
         it "executes command synchronously and returns CommandCompleted with default bounded timeout" $ do
             let st = initMemoryWorld []
             (res, finalSt) <- runEff $ runWorldMemory st $ do
-                runRunCommand (RunCommandArgs "echo hello" Nothing Nothing Nothing Nothing)
+                runRunCommand (RunCommandArgs "echo hello" Nothing Nothing)
 
             case res of
                 Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
@@ -409,7 +409,7 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
         it "reports CommandTimedOut when timeout expires" $ do
             withSystemTempDirectory "llmonad-coding-cmd" $ \tmpDir -> do
                 res <- runEff $ runWorldLocal tmpDir $ do
-                    runRunCommand (RunCommandArgs "sleep 5" Nothing (Just 100) Nothing Nothing)
+                    runRunCommand (RunCommandArgs "sleep 5" Nothing (Just 100))
 
                 case res of
                     Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
@@ -419,7 +419,7 @@ spec = describe "LLMonad.Tools.Coding (Milestone 3)" $ do
         it "executes through runCommandTool interface" $ do
             let st = initMemoryWorld []
             (toolRes, _) <- runEff $ runWorldMemory st $ do
-                toolRun runCommandTool (toJSON (RunCommandArgs "echo ok" Nothing Nothing Nothing Nothing))
+                toolRun runCommandTool (toJSON (RunCommandArgs "echo ok" Nothing Nothing))
 
             case toolRes of
                 Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)

@@ -152,7 +152,10 @@ embedShow = T.pack . show
 attempt :: Eff es a -> Eff es (Either LLMError a)
 attempt = E.try
 
--- | Retry an action up to N times on transient errors with exponential backoff and randomized jitter.
+{- | Retry an action up to N times on transient errors with exponential
+backoff and coarse time-derived jitter: each delay is scaled to a factor
+between 80% and 120% of its base value, derived from wall-clock nanos.
+-}
 retry :: (IOE :> es) => Int -> Eff es a -> Eff es a
 retry maxAttempts act = go 1
   where

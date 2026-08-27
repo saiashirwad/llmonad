@@ -61,19 +61,15 @@ module LLMonad.Tools.Coding (
     computeModifiedLines,
 ) where
 
-import Control.Applicative (asum)
 import Control.Monad (forM)
 import Data.Aeson (
     FromJSON (..),
-    Key,
-    Object,
     ToJSON (..),
     toJSON,
     withObject,
     (.:),
     (.:?),
  )
-import Data.Aeson.Types (Parser)
 import Data.Algorithm.Diff (PolyDiff (..), getDiff)
 import Data.List (nub, sort)
 import Data.Maybe (fromMaybe, isJust)
@@ -647,13 +643,14 @@ listDirTool = worldTool "list_dir" "List files and subdirectories within a direc
 -- 6. runCommand Tool
 --------------------------------------------------------------------------------
 
--- | Arguments for running external shell commands.
+{- | Arguments for running external shell commands. The @daemon@/@wait_ms@
+spellings once parsed here were never implemented; the model may still
+send them and aeson's object parser silently ignores unknown keys.
+-}
 data RunCommandArgs = RunCommandArgs
     { commandLine :: !Text
     , cwd :: !(Maybe FilePath)
     , timeoutMs :: !(Maybe Int)
-    , isDaemon :: !(Maybe Bool)
-    , waitMsBeforeAsync :: !(Maybe Int)
     }
     deriving (Show, Eq, Generic, ToJSON, ToSchema)
 
@@ -663,8 +660,6 @@ instance FromJSON RunCommandArgs where
             <$> o .:| ["commandLine", "command_line", "command", "cmd"]
             <*> o .:?| ["cwd", "working_directory", "dir"]
             <*> o .:?| ["timeoutMs", "timeout_ms", "timeout"]
-            <*> o .:?| ["isDaemon", "is_daemon", "daemon"]
-            <*> o .:?| ["waitMsBeforeAsync", "wait_ms_before_async", "wait_ms"]
 
 -- | Discriminated union result of command execution.
 data RunCommandResult

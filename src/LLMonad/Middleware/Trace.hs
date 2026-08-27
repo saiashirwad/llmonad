@@ -65,6 +65,10 @@ traceHandler emitTrace = \case
                 hist <- getHistory
                 let mName = findToolName cid hist
                     tName = fromMaybe "unknown" mName
+                    -- Tool results are model-facing text, so success is a
+                    -- heuristic: a literal JSON "error" key in the content.
+                    -- A tool that returns error-shaped data on purpose will
+                    -- be flagged not-ok; that trade-off is intended here.
                     isOk = not ("\"error\"" `T.isInfixOf` content)
                 liftIO $
                     emitTrace
