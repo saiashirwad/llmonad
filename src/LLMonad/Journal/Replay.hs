@@ -170,25 +170,46 @@ loadJournalText txt =
                 Right ev -> Right ev
      in mapM parseLine (zip [1 :: Int ..] rawLines)
 
+{- | Outcome of reading a journal file. Absent, corrupt, and loaded are
+distinguished in the type so resume logic never has to match on error
+text -- both spellings of \"missing\" and every wording change stay safe.
+-}
+data JournalLoad
+    = JournalLoaded [JournalEvent]
+    | JournalMissing
+    | JournalCorrupt Text
+
+journalFromDisk :: FilePath -> IO JournalLoad
+journalFromDisk fp = do
+    exists <- Directory.doesFileExist fp
+    if not exists
+        then pure JournalMissing
+        else either JournalCorrupt JournalLoaded . loadJournalText <$> TIO.readFile fp
+
+journalFromWorldEff :: (World :> es) => FilePath -> Eff es JournalLoad
+journalFromWorldEff fp = do
+    exists <- doesFileExist fp
+    if not exists
+        then pure JournalMissing
+        else either JournalCorrupt JournalLoaded . loadJournalText <$> readFileText fp
+
 -- | Load and deserialize a JSONL journal file from disk using standard IO.
 loadJournalFile :: (IOE :> es) => FilePath -> Eff es (Either Text [JournalEvent])
 loadJournalFile fp = liftIO $ do
-    exists <- Directory.doesFileExist fp
-    if not exists
-        then pure (Left ("Journal file does not exist: " <> T.pack fp))
-        else do
-            content <- TIO.readFile fp
-            pure (loadJournalText content)
+    res <- journalFromDisk fp
+    pure $ case res of
+        JournalLoaded evs -> Right evs
+        JournalMissing -> Left ("Journal file does not exist: " <> T.pack fp)
+        JournalCorrupt err -> Left err
 
 -- | Load and deserialize a JSONL journal file from the 'World' effect.
 loadJournalFileWorld :: (World :> es) => FilePath -> Eff es (Either Text [JournalEvent])
 loadJournalFileWorld fp = do
-    exists <- doesFileExist fp
-    if not exists
-        then pure (Left ("Journal file does not exist: " <> T.pack fp))
-        else do
-            content <- readFileText fp
-            pure (loadJournalText content)
+    res <- journalFromWorldEff fp
+    pure $ case res of
+        JournalLoaded evs -> Right evs
+        JournalMissing -> Left ("Journal file does not exist: " <> T.pack fp)
+        JournalCorrupt err -> Left err
 
 {- | Restore past session journal events from a JSONL file via IO.
 Fails closed (throws an IO exception) if the journal file is corrupted.
@@ -196,12 +217,12 @@ Returns empty list if the journal file does not exist yet.
 -}
 resumeSession :: (IOE :> es) => FilePath -> Eff es [JournalEvent]
 resumeSession fp = do
-    res <- loadJournalFile fp
+    res <- liftIO (journalFromDisk fp)
     case res of
-        Left err
-            | "Journal file does not exist" `T.isInfixOf` err -> pure []
-            | otherwise -> liftIO $ IO.ioError $ IO.userError ("Failed to resume corrupted session from " ++ fp ++ ": " ++ T.unpack err)
-        Right evs -> pure evs
+        JournalLoaded evs -> pure evs
+        JournalMissing -> pure []
+        JournalCorrupt err ->
+            liftIO $ IO.ioError $ IO.userError ("Failed to resume corrupted session from " ++ fp ++ ": " ++ T.unpack err)
 
 {- | Restore past session journal events using the 'World' effect.
 Fails closed (throws an IO exception) if the journal file is corrupted.
@@ -209,12 +230,12 @@ Returns empty list if the journal file does not exist yet.
 -}
 resumeSessionWorld :: (World :> es) => FilePath -> Eff es [JournalEvent]
 resumeSessionWorld fp = do
-    res <- loadJournalFileWorld fp
+    res <- journalFromWorldEff fp
     case res of
-        Left err
-            | "Journal file does not exist" `T.isInfixOf` err -> pure []
-            | otherwise -> Exception.throw (IO.userError ("Failed to resume corrupted session from " ++ fp ++ ": " ++ T.unpack err))
-        Right evs -> pure evs
+        JournalLoaded evs -> pure evs
+        JournalMissing -> pure []
+        JournalCorrupt err ->
+            Exception.throw (IO.userError ("Failed to resume corrupted session from " ++ fp ++ ": " ++ T.unpack err))
 
 -- | Reconstruct a conversational 'ChatMessage' history from a stream of 'JournalEvent's.
 reconstructChatHistory :: [JournalEvent] -> [ChatMessage]

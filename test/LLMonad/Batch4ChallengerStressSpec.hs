@@ -145,7 +145,7 @@ spec = describe "Batch 4 Empirical Challenger Stress Suite" $ do
         it "runRunCommand applies default 30s timeout when timeoutMs is Nothing" $ do
             let st = initMemoryWorld []
             (res, finalSt) <- runEff $ runWorldMemory st $ do
-                runRunCommand (RunCommandArgs "echo bounded default" Nothing Nothing Nothing Nothing)
+                runRunCommand (RunCommandArgs "echo bounded default" Nothing Nothing)
             case res of
                 Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
                 Right (CommandCompleted code stdout _ _) -> do
@@ -159,7 +159,7 @@ spec = describe "Batch 4 Empirical Challenger Stress Suite" $ do
         it "runRunCommand returns CommandTimedOut when timeout is reached" $ do
             withSystemTempDirectory "b4-stress-cmd-timeout" $ \tmpDir -> do
                 res <- runEff $ runWorldLocal tmpDir $ do
-                    runRunCommand (RunCommandArgs "sleep 5" Nothing (Just 200) Nothing Nothing)
+                    runRunCommand (RunCommandArgs "sleep 5" Nothing (Just 200))
                 case res of
                     Left err -> expectationFailure ("Unexpected error: " <> T.unpack err)
                     Right (CommandTimedOut toMs _ err) -> do

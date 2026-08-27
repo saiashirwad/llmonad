@@ -43,7 +43,12 @@ system = SystemMsg
 toolResult :: Text -> Text -> ChatMessage
 toolResult = ToolMsg
 
--- | Class for types that can be interpolated into prompts.
+{- | Class for types that can be interpolated into prompts.
+
+Only 'Text' and 'String' need their own instances; every 'Show' type --
+numbers, 'Bool', anything derived -- shares the one catch-all below, so
+no per-type instance can drift from it.
+-}
 class ToPromptArg a where
     toPromptArg :: a -> Text
 
@@ -52,21 +57,6 @@ instance ToPromptArg Text where
 
 instance ToPromptArg String where
     toPromptArg = T.pack
-
-instance ToPromptArg Int where
-    toPromptArg = T.pack . show
-
-instance ToPromptArg Integer where
-    toPromptArg = T.pack . show
-
-instance ToPromptArg Double where
-    toPromptArg = T.pack . show
-
-instance ToPromptArg Float where
-    toPromptArg = T.pack . show
-
-instance ToPromptArg Bool where
-    toPromptArg = T.pack . show
 
 instance {-# OVERLAPPABLE #-} (Show a) => ToPromptArg a where
     toPromptArg = T.pack . show

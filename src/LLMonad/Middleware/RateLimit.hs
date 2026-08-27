@@ -33,7 +33,6 @@ import LLMonad.Types
 -- | Rate limiter interface.
 data RateLimiter = RateLimiter
     { rlAcquire :: Int -> IO ()
-    , rlUpdate :: Maybe Usage -> IO ()
     }
 
 {- | Construct a token-bucket rate limiter.
@@ -62,14 +61,7 @@ newRateLimiter rate capacity = do
                             threadDelay (ceiling (shouldWait * 1000000))
                             loop
                 loop
-            , rlUpdate = \_ -> pure ()
             }
-
-{- | Handler interposing rate limiting on the 'LLM' effect.
-
-Each round acquires one token before reaching the wrapped interpreter; the
-call blocks until the bucket can cover it.
--}
 
 {- | Handler interposing rate limiting on the 'LLM' effect.
 
@@ -94,7 +86,6 @@ rateLimitHandler limiter = \case
     limited action = do
         liftIO (rlAcquire limiter 1)
         resp <- action
-        liftIO (rlUpdate limiter (crspUsage resp))
         pure resp
 
 -- | Rate limiting as first-class model middleware; attach to individual runtimes.
