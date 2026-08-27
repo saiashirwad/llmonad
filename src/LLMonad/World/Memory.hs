@@ -17,7 +17,7 @@ module LLMonad.World.Memory (
     defaultCommandHandlers,
 ) where
 
-import Control.Exception (throw)
+import Control.Exception qualified as E
 import Data.List (isPrefixOf, nub, sort, tails)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -32,27 +32,32 @@ import System.FilePath (makeRelative, normalise, takeDirectory, (</>))
 
 -- | Run World effect purely in memory using provided state.
 runWorldMemory ::
+    (IOE :> es) =>
     MemoryWorldState ->
     Eff (World : es) a ->
     Eff es (a, MemoryWorldState)
 runWorldMemory st action = do
-    reinterpret (runState st) memoryWorldHandler action
+    reinterpret_ (runState st) memoryWorldHandler action
 
 -- | Simplified in-memory interpreter starting from empty state.
-runWorldMemorySimple :: Eff (World : es) a -> Eff es a
+runWorldMemorySimple :: (IOE :> es) => Eff (World : es) a -> Eff es a
 runWorldMemorySimple action = do
     (res, _) <- runWorldMemory (initMemoryWorld []) action
     pure res
 
 -- | Run in-memory interpreter initialized with a list of file paths and contents.
 runWorldMemoryWithFiles ::
+    (IOE :> es) =>
     [(FilePath, Text)] ->
     Eff (World : es) a ->
     Eff es (a, MemoryWorldState)
 runWorldMemoryWithFiles files = runWorldMemory (initMemoryWorld files)
 
-memoryWorldHandler :: EffectHandler World (State MemoryWorldState : es)
-memoryWorldHandler _ = \case
+{- | Lookup failures raise eagerly at the operation, never lazily when the
+caller forces the result.
+-}
+memoryWorldHandler :: (IOE :> es) => EffectHandler_ World (State MemoryWorldState : es)
+memoryWorldHandler = \case
     ReadFileText fp -> do
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
@@ -60,16 +65,16 @@ memoryWorldHandler _ = \case
             Just content -> pure content
             Nothing ->
                 if isMemDir (mwsFiles st) key
-                    then throw (WorldIsADirectory fp)
-                    else throw (WorldFileNotFound fp)
+                    then liftIO (E.throwIO (WorldIsADirectory fp))
+                    else liftIO (E.throwIO (WorldFileNotFound fp))
     ReadFileSlice fp mStart mEnd -> do
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
         case Map.lookup key (mwsFiles st) of
             Nothing ->
                 if isMemDir (mwsFiles st) key
-                    then throw (WorldIsADirectory fp)
-                    else throw (WorldFileNotFound fp)
+                    then liftIO (E.throwIO (WorldIsADirectory fp))
+                    else liftIO (E.throwIO (WorldFileNotFound fp))
             Just content -> do
                 let allLines = T.lines content
                 let total = length allLines
@@ -81,13 +86,13 @@ memoryWorldHandler _ = \case
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
         if isMemDir (mwsFiles st) key
-            then throw (WorldIsADirectory fp)
+            then liftIO (E.throwIO (WorldIsADirectory fp))
             else modify (\s -> s{mwsFiles = Map.insert key content (mwsFiles s)})
     DeleteFile fp -> do
         st <- get
         let key = canonicalMemKey (mwsWorkingDir st) fp
         case Map.lookup key (mwsFiles st) of
-            Nothing -> throw (WorldFileNotFound fp)
+            Nothing -> liftIO (E.throwIO (WorldFileNotFound fp))
             Just _ -> modify (\s -> s{mwsFiles = Map.delete key (mwsFiles s)})
     CreateDirectory _ _ ->
         pure ()
@@ -95,7 +100,7 @@ memoryWorldHandler _ = \case
         st <- get
         let prefix = canonicalMemKey (mwsWorkingDir st) fp
         if not (isMemDir (mwsFiles st) prefix)
-            then throw (WorldDirectoryNotFound fp)
+            then liftIO (E.throwIO (WorldDirectoryNotFound fp))
             else do
                 let files = Map.keys (mwsFiles st)
                 let childEntries = getChildEntries prefix files
@@ -104,7 +109,7 @@ memoryWorldHandler _ = \case
         st <- get
         let searchPrefix = canonicalMemKey (mwsWorkingDir st) (soSearchDir opts)
         if not (isMemDir (mwsFiles st) searchPrefix)
-            then throw (WorldDirectoryNotFound (soSearchDir opts))
+            then liftIO (E.throwIO (WorldDirectoryNotFound (soSearchDir opts)))
             else do
                 let query = soQuery opts
                 let isCaseInsensitive = soCaseInsensitive opts
@@ -139,7 +144,7 @@ memoryWorldHandler _ = \case
         st <- get
         let searchPrefix = canonicalMemKey (mwsWorkingDir st) (foSearchDir opts)
         if not (isMemDir (mwsFiles st) searchPrefix)
-            then throw (WorldDirectoryNotFound (foSearchDir opts))
+            then liftIO (E.throwIO (WorldDirectoryNotFound (foSearchDir opts)))
             else do
                 let pat = foPattern opts
                 let ftype = foTypeFilter opts

@@ -54,6 +54,13 @@ spec = do
                     ev = ToolCompleted "call_view_1" res
                 eitherDecode (encode ev) `shouldBe` Right ev
 
+            it "recovers pre-tagging journals that stored bare ToolCompleted payloads" $ do
+                -- Tagged results decode as Left/Right objects; a bare payload
+                -- falls through and is recovered wrapped in 'Right'.
+                let legacy = "{\"type\":\"ToolCompleted\",\"toolCallId\":\"call_legacy\",\"result\":{\"bytes\":12}}"
+                let res :: Either String JournalEvent = eitherDecode legacy
+                res `shouldBe` Right (ToolCompleted "call_legacy" (Right (object ["bytes" .= (12 :: Int)])))
+
             it "roundtrips MetricsReported event" $ do
                 let metrics =
                         ModelMetrics
