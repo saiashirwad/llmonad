@@ -59,10 +59,6 @@ module LLMonad.Tools.Coding (
     -- * Diff Utilities
     computeDiffSnippet,
     computeModifiedLines,
-
-    -- * JSON Helpers
-    oneOf,
-    orElse,
 ) where
 
 import Control.Applicative (asum)
@@ -87,7 +83,7 @@ import Effectful
 import Effectful.Exception qualified as E
 import GHC.Generics (Generic)
 import LLMonad.Schema (ToSchema (..))
-import LLMonad.Tools (Tool, ToolResult, Toolset, tool', tools)
+import LLMonad.Tools (Tool, ToolResult, Toolset, tool', tools, (.:?|), (.:|))
 import LLMonad.World (
     CommandSpec (..),
     DirEntry (..),
@@ -109,20 +105,6 @@ import LLMonad.World (
     writeFileText,
  )
 import System.FilePath (makeRelative, (</>))
-
---------------------------------------------------------------------------------
--- 0. JSON Helpers
---------------------------------------------------------------------------------
-
-{- | Try each key name in order; return the value of the first key that is present.
-  Missing keys are skipped. A present key of the wrong type is an error.
--}
-oneOf :: (FromJSON a) => Object -> [Key] -> Parser (Maybe a)
-oneOf o keys = asum <$> traverse (o .:?) keys
-
--- | Use the optional result if it is present; otherwise run the fallback parser.
-orElse :: Parser (Maybe a) -> Parser a -> Parser a
-orElse p fallback = p >>= maybe fallback pure
 
 -- | Build a coding tool that reports expected World failures to the model.
 worldTool ::
@@ -153,10 +135,10 @@ data ViewFileArgs = ViewFileArgs
 instance FromJSON ViewFileArgs where
     parseJSON = withObject "ViewFileArgs" $ \o ->
         ViewFileArgs
-            <$> (oneOf o ["filePath", "file_path"] `orElse` (o .: "path"))
-            <*> oneOf o ["startLine", "start_line"]
-            <*> oneOf o ["endLine", "end_line"]
-            <*> oneOf o ["contentOffset", "content_offset"]
+            <$> o .:| ["filePath", "file_path", "path"]
+            <*> o .:?| ["startLine", "start_line"]
+            <*> o .:?| ["endLine", "end_line"]
+            <*> o .:?| ["contentOffset", "content_offset"]
 
 -- | A single indexed line of file text.
 data ViewFileLine = ViewFileLine
@@ -278,13 +260,13 @@ data EditFileArgs = EditFileArgs
 instance FromJSON EditFileArgs where
     parseJSON = withObject "EditFileArgs" $ \o ->
         EditFileArgs
-            <$> (oneOf o ["targetFile", "target_file", "filePath", "file_path"] `orElse` (o .: "path"))
+            <$> o .:| ["targetFile", "target_file", "filePath", "file_path", "path"]
             <*> o .:? "instruction"
-            <*> (oneOf o ["targetContent", "target_content", "target", "oldContent", "old_content"] `orElse` pure "")
-            <*> (oneOf o ["replacementContent", "replacement_content", "replacement", "newContent", "new_content"] `orElse` pure "")
-            <*> oneOf o ["startLine", "start_line"]
-            <*> oneOf o ["endLine", "end_line"]
-            <*> oneOf o ["allowMultiple", "allow_multiple"]
+            <*> (fromMaybe "" <$> o .:?| ["targetContent", "target_content", "target", "oldContent", "old_content"])
+            <*> (fromMaybe "" <$> o .:?| ["replacementContent", "replacement_content", "replacement", "newContent", "new_content"])
+            <*> o .:?| ["startLine", "start_line"]
+            <*> o .:?| ["endLine", "end_line"]
+            <*> o .:?| ["allowMultiple", "allow_multiple"]
 
 -- | Result of editing a file.
 data EditFileResult = EditFileResult
@@ -318,6 +300,30 @@ runEditFile EditFileArgs{..} = do
                     if targetContent == replacementContent
                         then pure $ Right (EditFileResult fp 0 [] "")
                         else do
+                            -- Shared edit policy for both paths below: reject zero
+                            -- matches, demand allowMultiple before touching more than
+                            -- one, replace all-or-first, splice, and report the write.
+                            let applyPolicy material assemble zeroMsg multiMsg occ
+                                    | occ == 0 = Left zeroMsg
+                                    | occ > 1 && allowMultiple /= Just True = Left multiMsg
+                                    | otherwise =
+                                        let replaced =
+                                                if allowMultiple == Just True
+                                                    then T.replace targetContent replacementContent material
+                                                    else replaceFirst targetContent replacementContent material
+                                         in Right (assemble replaced, if allowMultiple == Just True then occ else 1)
+                                finish result = case result of
+                                    Left err -> pure (Left err)
+                                    Right (newContent, count) -> do
+                                        writeFileText fp newContent
+                                        pure $
+                                            Right
+                                                ( EditFileResult
+                                                    fp
+                                                    count
+                                                    (computeModifiedLines content newContent)
+                                                    (computeDiffSnippet fp content newContent)
+                                                )
                             let hasLineBounds = isJust startLine || isJust endLine
                             if hasLineBounds
                                 then do
@@ -332,42 +338,25 @@ runEditFile EditFileArgs{..} = do
                                             let (targetLines, postLines) = splitAt (e - s + 1) rest
                                             let targetChunk = T.intercalate "\n" targetLines
                                             let occurrences = countSubstrings targetContent targetChunk
-                                            if occurrences == 0
-                                                then pure (Left "Target content not found in specified range")
-                                                else
-                                                    if occurrences > 1 && allowMultiple /= Just True
-                                                        then pure (Left "Target content matched multiple times in specified range. Specify narrower line bounds or set allowMultiple to true")
-                                                        else do
-                                                            let replacedChunk =
-                                                                    if allowMultiple == Just True
-                                                                        then T.replace targetContent replacementContent targetChunk
-                                                                        else replaceFirst targetContent replacementContent targetChunk
-                                                            let newTargetLines = T.splitOn "\n" replacedChunk
-                                                            let newAllLines = preLines ++ newTargetLines ++ postLines
-                                                            let hadTrailingNewline = T.isSuffixOf "\n" content
-                                                            let newContent = T.intercalate "\n" newAllLines <> (if hadTrailingNewline && not (null newAllLines) then "\n" else "")
-                                                            writeFileText fp newContent
-                                                            let diff = computeDiffSnippet fp content newContent
-                                                            let modLines = computeModifiedLines content newContent
-                                                            let count = if allowMultiple == Just True then occurrences else 1
-                                                            pure $ Right (EditFileResult fp count modLines diff)
+                                            finish $
+                                                applyPolicy
+                                                    targetChunk
+                                                    ( \chunk ->
+                                                        let newAllLines = preLines ++ T.splitOn "\n" chunk ++ postLines
+                                                         in T.intercalate "\n" newAllLines <> (if T.isSuffixOf "\n" content && not (null newAllLines) then "\n" else "")
+                                                    )
+                                                    "Target content not found in specified range"
+                                                    "Target content matched multiple times in specified range. Specify narrower line bounds or set allowMultiple to true"
+                                                    occurrences
                                 else do
                                     let occurrences = countSubstrings targetContent content
-                                    if occurrences == 0
-                                        then pure (Left ("Target content not found in file: " <> T.pack fp))
-                                        else
-                                            if occurrences > 1 && allowMultiple /= Just True
-                                                then pure (Left ("Target content matched " <> T.pack (show occurrences) <> " times in file. Specify line bounds or set allowMultiple to true"))
-                                                else do
-                                                    let newContent =
-                                                            if allowMultiple == Just True
-                                                                then T.replace targetContent replacementContent content
-                                                                else replaceFirst targetContent replacementContent content
-                                                    writeFileText fp newContent
-                                                    let diff = computeDiffSnippet fp content newContent
-                                                    let modLines = computeModifiedLines content newContent
-                                                    let count = if allowMultiple == Just True then occurrences else 1
-                                                    pure $ Right (EditFileResult fp count modLines diff)
+                                    finish $
+                                        applyPolicy
+                                            content
+                                            id
+                                            ("Target content not found in file: " <> T.pack fp)
+                                            ("Target content matched " <> T.pack (show occurrences) <> " times in file. Specify line bounds or set allowMultiple to true")
+                                            occurrences
 
 -- | Replace first occurrence of needle with replacement in haystack.
 replaceFirst :: Text -> Text -> Text -> Text
@@ -435,13 +424,13 @@ data GrepSearchArgs = GrepSearchArgs
 instance FromJSON GrepSearchArgs where
     parseJSON = withObject "GrepSearchArgs" $ \o ->
         GrepSearchArgs
-            <$> (oneOf o ["query", "pattern"] `orElse` (o .: "search_term"))
-            <*> oneOf o ["searchPath", "search_path", "path", "directory"]
-            <*> oneOf o ["isRegex", "is_regex"]
-            <*> oneOf o ["caseInsensitive", "case_insensitive"]
-            <*> oneOf o ["includes", "include"]
-            <*> oneOf o ["matchPerLine", "match_per_line"]
-            <*> oneOf o ["maxMatches", "max_matches"]
+            <$> o .:| ["query", "pattern", "search_term"]
+            <*> o .:?| ["searchPath", "search_path", "path", "directory"]
+            <*> o .:?| ["isRegex", "is_regex"]
+            <*> o .:?| ["caseInsensitive", "case_insensitive"]
+            <*> o .:?| ["includes", "include"]
+            <*> o .:?| ["matchPerLine", "match_per_line"]
+            <*> o .:?| ["maxMatches", "max_matches"]
 
 -- | A single search match.
 data GrepMatch = GrepMatch
@@ -503,12 +492,12 @@ data FindByNameArgs = FindByNameArgs
 instance FromJSON FindByNameArgs where
     parseJSON = withObject "FindByNameArgs" $ \o ->
         FindByNameArgs
-            <$> oneOf o ["pattern", "glob", "name"]
-            <*> oneOf o ["searchDirectory", "search_directory", "searchDir", "search_dir", "directory", "path"]
-            <*> oneOf o ["itemType", "item_type", "typeFilter", "type_filter", "type"]
-            <*> oneOf o ["maxDepth", "max_depth", "depth"]
-            <*> oneOf o ["excludes", "exclude"]
-            <*> oneOf o ["fullPath", "full_path"]
+            <$> o .:?| ["pattern", "glob", "name"]
+            <*> o .:?| ["searchDirectory", "search_directory", "searchDir", "search_dir", "directory", "path"]
+            <*> o .:?| ["itemType", "item_type", "typeFilter", "type_filter", "type"]
+            <*> o .:?| ["maxDepth", "max_depth", "depth"]
+            <*> o .:?| ["excludes", "exclude"]
+            <*> o .:?| ["fullPath", "full_path"]
 
 -- | Discovered file or directory metadata.
 data FileEntryInfo = FileEntryInfo
@@ -575,9 +564,9 @@ data ListDirArgs = ListDirArgs
 instance FromJSON ListDirArgs where
     parseJSON = withObject "ListDirArgs" $ \o ->
         ListDirArgs
-            <$> (oneOf o ["directoryPath", "directory_path", "dir", "path"] `orElse` pure ".")
+            <$> (fromMaybe "." <$> o .:?| ["directoryPath", "directory_path", "dir", "path"])
             <*> o .:? "recursive"
-            <*> oneOf o ["maxDepth", "max_depth"]
+            <*> o .:?| ["maxDepth", "max_depth"]
 
 -- | Directory entry item info.
 data DirEntryInfo = DirEntryInfo
@@ -671,11 +660,11 @@ data RunCommandArgs = RunCommandArgs
 instance FromJSON RunCommandArgs where
     parseJSON = withObject "RunCommandArgs" $ \o ->
         RunCommandArgs
-            <$> (oneOf o ["commandLine", "command_line", "command"] `orElse` (o .: "cmd"))
-            <*> oneOf o ["cwd", "working_directory", "dir"]
-            <*> oneOf o ["timeoutMs", "timeout_ms", "timeout"]
-            <*> oneOf o ["isDaemon", "is_daemon", "daemon"]
-            <*> oneOf o ["waitMsBeforeAsync", "wait_ms_before_async", "wait_ms"]
+            <$> o .:| ["commandLine", "command_line", "command", "cmd"]
+            <*> o .:?| ["cwd", "working_directory", "dir"]
+            <*> o .:?| ["timeoutMs", "timeout_ms", "timeout"]
+            <*> o .:?| ["isDaemon", "is_daemon", "daemon"]
+            <*> o .:?| ["waitMsBeforeAsync", "wait_ms_before_async", "wait_ms"]
 
 -- | Discriminated union result of command execution.
 data RunCommandResult

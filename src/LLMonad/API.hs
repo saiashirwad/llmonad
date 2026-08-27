@@ -27,7 +27,7 @@ import LLMonad.Structured (askStructured)
 class AskFunction es fn a | fn -> es a where
     askApply :: Text -> [Text] -> fn
 
-instance (LLM :> es, FromJSON a, ToSchema a) => AskFunction es (Eff es a) a where
+instance (IOE :> es, LLM :> es, FromJSON a, ToSchema a) => AskFunction es (Eff es a) a where
     askApply t args =
         let fullPrompt = if null args then t else t <> ":\n" <> T.unwords args
          in askStructured fullPrompt

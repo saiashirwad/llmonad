@@ -33,7 +33,6 @@ import Control.Concurrent.MVar (modifyMVar, newMVar)
 import Control.Exception (throwIO)
 import Control.Monad (when)
 import Data.Aeson (FromJSON, Value, encode, object, parseJSON, (.=))
-import Data.Aeson.Types (parseEither)
 import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (find)
@@ -53,9 +52,9 @@ import LLMonad.Core (
     withTransaction,
  )
 import LLMonad.Error (LLMError (..))
-import LLMonad.Internal.Extract (decodeViaJSON)
 import LLMonad.Model (ModelRuntime, runModelRuntime)
 import LLMonad.Schema (ToSchema (..))
+import LLMonad.Structured (decodeFeedback, decodePayloadOrText)
 import LLMonad.Tools (Tool (..), Toolset, duplicateToolNamesIn, hoistTool, toolsetTools)
 import LLMonad.Types
 import Prelude hiding (id, (.))
@@ -301,20 +300,13 @@ runStructuredLoopWith opts availableTools instruction = withTransaction $ do
     -- the model what went wrong and demote the rest of the run to the
     -- schema-forced phase.
     settle roundsLeft response =
-        case decodeResponse response of
+        case decodePayloadOrText response of
             Right output -> pure output
             Left detail
                 | roundsLeft <= 1 -> liftIO (throwIO (DecodeError detail (crspText response)))
                 | otherwise -> do
-                    pushMessage . UserMsg $
-                        "Your final response could not be decoded ("
-                            <> T.pack detail
-                            <> "). Return only valid JSON that conforms to the schema."
+                    pushMessage . UserMsg $ decodeFeedback "final" detail
                     drive SchemaForced (roundsLeft - 1) []
-
-    decodeResponse response = case crspStructuredPayload response of
-        Just value -> parseEither parseJSON value
-        Nothing -> decodeViaJSON (crspText response)
 
     exhausted = liftIO (throwIO (AgentRoundsExhausted (agentMaxRounds opts)))
 
