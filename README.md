@@ -239,6 +239,33 @@ the offending turn's ordinal — and tool drift (a different call next, or the
 same call with drifted arguments) names the tool — instead of shifting every
 later answer.
 
+## Run agents against real models
+
+Live models need budgets. The defaults hold for short loops; when an agent
+researches across files, raise `agentMaxRounds` and say the cap out loud in
+the system prompt:
+
+```haskell
+let opts = defaultAgentOpts{agentMaxRounds = 24}
+    def = withAgentOpts opts (textAgent "Investigate at most five tool calls." id)
+```
+
+Custom tools should feed failures back instead of aborting the loop --
+catch expected domain errors and return them as tool-error strings so the
+model can adapt:
+
+```haskell
+tool' "repo_search" "Search project lines." $ \args ->
+    fmap (either (Left . prettyWorldError) Right) $
+      Ex.try @WorldError (searchFiles ...)
+```
+
+Two more operational notes: SearchFiles include\/exclude patterns carry
+glob syntax (`*.hs`, `src/*.md`) and match the whole relative path -- bare
+extensions like `.hs` still work as substrings. And `Journal` files are
+append-only logs; use `runJournalFileTruncate` when you want a recording
+that contains exactly one run.
+
 ## Keep a conversation
 
 `invoke` forgets. `start` returns a session that remembers:

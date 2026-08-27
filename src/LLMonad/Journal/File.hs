@@ -11,6 +11,7 @@
 module LLMonad.Journal.File (
     -- * File-based Journal Interpreters
     runJournalFile,
+    runJournalFileTruncate,
     runJournalFileWithEvents,
     runJournalFileWorld,
 ) where
@@ -59,6 +60,33 @@ runJournalFile fp action = do
             else pure []
     eventsRef <- liftIO $ newIORef (reverse initialEvents)
     interpret_ (fileJournalHandler fp eventsRef) action
+
+{- | Persist to @fp@ like 'runJournalFile', but ignore anything the file
+already contained: it is truncated at startup, so the returned event list
+holds only this run's records. Append-only journals accumulate every prior
+session, which otherwise makes per-run audits sweep up genuine divergences
+from long-dead attempts.
+-}
+
+{- | Persist to @fp@ like 'runJournalFile', but ignore anything the file
+already contained: it is truncated at startup, so the returned event list
+holds only this run's records. Append-only journals accumulate every prior
+session, which otherwise makes per-run audits sweep up genuine divergences
+from long-dead attempts.
+-}
+runJournalFileTruncate ::
+    (IOE :> es) =>
+    FilePath ->
+    Eff (Journal : es) a ->
+    Eff es (a, [JournalEvent])
+runJournalFileTruncate fp action = do
+    liftIO $ do
+        Directory.createDirectoryIfMissing True (FilePath.takeDirectory fp)
+        TIO.writeFile fp ""
+    eventsRef <- liftIO (newIORef [])
+    res <- interpret_ (fileJournalHandler fp eventsRef) action
+    evs <- liftIO (reverse <$> readIORef eventsRef)
+    pure (res, evs)
 
 -- | Run file journal interpreter and return both the computation result and the final list of events.
 runJournalFileWithEvents ::

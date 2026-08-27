@@ -256,6 +256,20 @@ spec = do
 
                     val `shouldBe` "done"
                     evs `shouldBe` [UserMsg "hello with events"]
+                    val `shouldBe` "done"
+                    evs `shouldBe` [UserMsg "hello with events"]
+
+            it "runJournalFileTruncate captures only the current run on an append-only file" $ do
+                withSystemTempDirectory "journal_truncate_test" $ \tmp -> do
+                    let p = tmp ++ "/truncate.jsonl"
+                    runEff $ runJournalFile p $ recordUserMsg "stale previous session"
+
+                    (val, evs) <- runEff $ runJournalFileTruncate p $ do
+                        recordUserMsg "current session"
+                        pure "fresh"
+
+                    val `shouldBe` "fresh"
+                    evs `shouldBe` [UserMsg "current session"]
 
             it "fails closed (throws IO exception) on corrupted file in runJournalFile" $ do
                 withSystemTempDirectory "journal_corrupt_run" $ \tmpDir -> do
