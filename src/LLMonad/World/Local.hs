@@ -22,14 +22,14 @@ import Control.Concurrent.Async (cancel, wait, withAsync)
 import Control.Exception qualified as E
 import Control.Monad (forM)
 import Data.Bifunctor (bimap)
-import Data.List (isPrefixOf, sort, tails)
-import Data.Text (Text)
+import Data.List (isPrefixOf, sort)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import LLMonad.World (World (..))
+import LLMonad.World.Match (matchLine, matchesPathFilters)
 import LLMonad.World.Types
 import System.Directory (
     canonicalizePath,
@@ -150,13 +150,12 @@ localWorldHandler canonicalRoot _ = \case
                 let includes = soIncludes opts
                 let excludes = soExcludes opts
 
-                let filterByPatterns path =
-                        let rel = makeRelative canonicalRoot path
-                            hasInclude = null includes || any (`T.isInfixOf` T.pack rel) includes
-                            hasExclude = not (null excludes) && any (`T.isInfixOf` T.pack rel) excludes
-                         in hasInclude && not hasExclude
-
-                let matchingFiles = sort (filter filterByPatterns allFiles)
+                let matchingFiles =
+                        sort
+                            ( filter
+                                (\path -> matchesPathFilters includes excludes (T.pack (makeRelative canonicalRoot path)))
+                                allFiles
+                            )
 
                 matches <- forM matchingFiles $ \file -> do
                     let relFile = makeRelative canonicalRoot file
@@ -470,26 +469,3 @@ collectFindEntries canonicalRoot root maxDepth = go root 0
                             else pure []
                     pure (self ++ sub)
         pure (concat results)
-
--- | Check if a line matches the search query.
-matchLine :: Text -> Bool -> Bool -> Text -> Bool
-matchLine query isCaseInsensitive isRegex line =
-    let q = if isCaseInsensitive then T.toLower query else query
-        l = if isCaseInsensitive then T.toLower line else line
-     in if isRegex
-            then simpleGlobMatch (T.unpack q) (T.unpack l)
-            else q `T.isInfixOf` l
-
--- | Wildcard glob matching supporting '*' wildcards anywhere in the line.
-simpleGlobMatch :: String -> String -> Bool
-simpleGlobMatch pat str = any (globMatch pat) (tails str)
-  where
-    globMatch "" _ = True
-    globMatch ('*' : ps) s =
-        globMatch ps s || case s of
-            "" -> False
-            (_ : rest) -> globMatch ('*' : ps) rest
-    globMatch (p : ps) (s : rest)
-        | p == s = globMatch ps rest
-        | otherwise = False
-    globMatch _ _ = False

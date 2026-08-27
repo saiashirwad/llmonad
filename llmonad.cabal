@@ -75,6 +75,7 @@ library
         LLMonad.Workflow
         LLMonad.World
         LLMonad.World.Types
+        LLMonad.World.Match
         LLMonad.World.Local
         LLMonad.World.Worktree
         LLMonad.World.Memory
