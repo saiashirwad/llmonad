@@ -29,7 +29,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import LLMonad.World (World (..))
-import LLMonad.World.Match (matchLine, matchesPathFilters)
+import LLMonad.World.Match (isSkippedDirName, matchLine, matchesPathFilters)
 import LLMonad.World.Types
 import System.Directory (
     canonicalizePath,
@@ -123,7 +123,7 @@ localWorldHandler canonicalRoot _ = \case
         if not isDir
             then E.throwIO (WorldDirectoryNotFound fp)
             else do
-                names <- SD.listDirectory target
+                names <- filter (not . isSkippedDirName) <$> SD.listDirectory target
                 forM (sort names) $ \name -> do
                     let itemTarget = target </> name
                     isD <- doesDirectoryExist itemTarget
@@ -435,7 +435,7 @@ runLocalProcess spec defaultCwd = do
 collectFilesRecursively :: FilePath -> FilePath -> IO [FilePath]
 collectFilesRecursively canonicalRoot dir = do
     names <- SD.listDirectory dir
-    let filtered = sort (filter (\n -> not (n == ".git" || n == "dist-newstyle" || n == ".agents")) names)
+    let filtered = sort (filter (not . isSkippedDirName) names)
     paths <- forM filtered $ \name -> do
         let path = dir </> name
         canonPath <- canonicalizePath path
@@ -454,7 +454,7 @@ collectFindEntries canonicalRoot root maxDepth = go root 0
   where
     go currentDir currentDepth = do
         names <- SD.listDirectory currentDir
-        let filtered = filter (\n -> not (n == ".git" || n == "dist-newstyle" || n == ".agents")) names
+        let filtered = filter (not . isSkippedDirName) names
         results <- forM filtered $ \name -> do
             let path = currentDir </> name
             canonPath <- canonicalizePath path

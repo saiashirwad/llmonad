@@ -27,7 +27,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.State.Static.Local
 import LLMonad.World (World (..))
-import LLMonad.World.Match (matchLine, matchesPathFilters)
+import LLMonad.World.Match (matchLine, matchesPathFilters, pathHasSkippedDir)
 import LLMonad.World.Types
 import System.FilePath (makeRelative, normalise, takeDirectory, (</>))
 
@@ -124,7 +124,7 @@ memoryWorldHandler = \case
 
                 let targetFiles =
                         filter
-                            (\item@(k, _) -> inDir item && matchesPathFilters includes excludes (T.pack k))
+                            (\item@(k, _) -> inDir item && not (pathHasSkippedDir k) && matchesPathFilters includes excludes (T.pack k))
                             allFiles
 
                 let matches =
@@ -150,7 +150,10 @@ memoryWorldHandler = \case
                 let excludes = foExcludes opts
                 let maxDepth = foMaxDepth opts
 
-                let allEntries = getAllMemEntries searchPrefix (Map.keys (mwsFiles st))
+                let allEntries =
+                        getAllMemEntries
+                            searchPrefix
+                            (filter (not . pathHasSkippedDir) (Map.keys (mwsFiles st)))
                 let keepEntry (path, isDir, depth) =
                         let name = T.pack (makeRelative (takeDirectory path) path)
                             typeOk = case ftype of
@@ -208,8 +211,13 @@ getChildEntries :: FilePath -> [FilePath] -> [DirEntry]
 getChildEntries dirPrefix allFiles =
     let relevantFiles =
             if null dirPrefix
-                then allFiles
-                else [drop (length dirPrefix + 1) f | f <- allFiles, (dirPrefix ++ "/") `isPrefixOf` f]
+                then filter (not . pathHasSkippedDir) allFiles
+                else
+                    [ drop (length dirPrefix + 1) f
+                    | f <- allFiles
+                    , (dirPrefix ++ "/") `isPrefixOf` f
+                    , not (pathHasSkippedDir (drop (length dirPrefix + 1) f))
+                    ]
         firstSegments = [takeWhile (/= '/') f | f <- relevantFiles, not (null f)]
         uniqueNames = sort (nub firstSegments)
      in [ DirEntry

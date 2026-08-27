@@ -28,3 +28,6 @@ TAGS
 cabal.sandbox.config
 *.swp
 *.swo
+
+# Local secrets
+.env
