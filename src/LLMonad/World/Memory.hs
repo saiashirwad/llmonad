@@ -18,7 +18,7 @@ module LLMonad.World.Memory (
 ) where
 
 import Control.Exception qualified as E
-import Data.List (isPrefixOf, nub, sort, tails)
+import Data.List (isPrefixOf, nub, sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -27,6 +27,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.State.Static.Local
 import LLMonad.World (World (..))
+import LLMonad.World.Match (matchLine, matchesPathFilters)
 import LLMonad.World.Types
 import System.FilePath (makeRelative, normalise, takeDirectory, (</>))
 
@@ -121,12 +122,10 @@ memoryWorldHandler = \case
                 let allFiles = Map.toList (mwsFiles st)
                 let inDir (k, _) = null searchPrefix || (searchPrefix ++ "/") `isPrefixOf` k || searchPrefix == k
 
-                let filterPatterns (k, _) =
-                        let hasInc = null includes || any (`T.isInfixOf` T.pack k) includes
-                            hasExc = not (null excludes) && any (`T.isInfixOf` T.pack k) excludes
-                         in hasInc && not hasExc
-
-                let targetFiles = filter (\item -> inDir item && filterPatterns item) allFiles
+                let targetFiles =
+                        filter
+                            (\item@(k, _) -> inDir item && matchesPathFilters includes excludes (T.pack k))
+                            allFiles
 
                 let matches =
                         concatMap
@@ -134,7 +133,7 @@ memoryWorldHandler = \case
                                 let fileLines = zip [1 ..] (T.lines content)
                                  in [ SearchMatch path lineNum lineText
                                     | (lineNum, lineText) <- fileLines
-                                    , matchLineMem query isCaseInsensitive isRegex lineText
+                                    , matchLine query isCaseInsensitive isRegex lineText
                                     ]
                             )
                             targetFiles
@@ -243,28 +242,6 @@ getAllMemEntries prefix allFiles =
 
 pathDepth :: FilePath -> Int
 pathDepth p = length (filter (== '/') (normalise p))
-
-matchLineMem :: Text -> Bool -> Bool -> Text -> Bool
-matchLineMem query isCaseInsensitive isRegex line =
-    let q = if isCaseInsensitive then T.toLower query else query
-        l = if isCaseInsensitive then T.toLower line else line
-     in if isRegex
-            then simpleGlobMatch (T.unpack q) (T.unpack l)
-            else q `T.isInfixOf` l
-
--- | Wildcard glob matching supporting '*' wildcards anywhere in the line.
-simpleGlobMatch :: String -> String -> Bool
-simpleGlobMatch pat str = any (globMatch pat) (tails str)
-  where
-    globMatch "" _ = True
-    globMatch ('*' : ps) s =
-        globMatch ps s || case s of
-            "" -> False
-            (_ : rest) -> globMatch ('*' : ps) rest
-    globMatch (p : ps) (s : rest)
-        | p == s = globMatch ps rest
-        | otherwise = False
-    globMatch _ _ = False
 
 -- | Simulate default command executions.
 simulateCommand :: CommandSpec -> MemoryWorldState -> ProcessResult

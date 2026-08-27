@@ -15,7 +15,7 @@ module LLMonad.ChallengerSpec (spec) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
-import Control.Exception (evaluate, try)
+import Control.Exception (try)
 import Control.Monad (forM_, replicateM, replicateM_)
 import Data.Aeson (
     FromJSON,
